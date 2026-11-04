@@ -1,0 +1,8 @@
+{
+  "id": "murmur-preview",
+  "name": "Murmur reader preview",
+  "description": "A separate read-only human workspace using the existing Murmur operator API.",
+  "version": "0.1.0",
+  "min_server_version": "12.0.1",
+  "webapp": {"bundle_path": "webapp/index.js"}
+}

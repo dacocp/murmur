@@ -1,0 +1,50 @@
+name: murmur
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: murmur
+      POSTGRES_USER: murmur
+      POSTGRES_PASSWORD: ${MURMUR_DB_PASSWORD:?Run bootstrap.py first}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U murmur -d murmur']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  mattermost:
+    image: mattermost/mattermost-team-edition:12.0.1
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:8065:8065'
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://murmur:${MURMUR_DB_PASSWORD}@postgres:5432/murmur?sslmode=disable&connect_timeout=10
+      MM_SERVICESETTINGS_SITEURL: http://localhost:8065
+      MM_SERVICESETTINGS_LISTENADDRESS: ':8065'
+      MM_PLUGINSETTINGS_ENABLE: 'true'
+      MM_PLUGINSETTINGS_ENABLEUPLOADS: 'true'
+      MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: 'true'
+      MM_EMAILSETTINGS_SENDEMAILNOTIFICATIONS: 'false'
+      MM_LOGSETTINGS_CONSOLELEVEL: WARN
+      MM_TEAMSETTINGS_ENABLEOPENSERVER: 'false'
+      MM_TEAMSETTINGS_MAXUSERSPERTEAM: '1000'
+    volumes:
+      - mattermost-config:/mattermost/config
+      - mattermost-data:/mattermost/data
+      - mattermost-logs:/mattermost/logs
+      - mattermost-plugins:/mattermost/plugins
+      - mattermost-client-plugins:/mattermost/client/plugins
+volumes:
+  postgres:
+  mattermost-config:
+  mattermost-data:
+  mattermost-logs:
+  mattermost-plugins:
+  mattermost-client-plugins:

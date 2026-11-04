@@ -1,0 +1,15 @@
+{
+  "id": "murmur",
+  "name": "Murmur",
+  "description": "Explicit native-agent messaging and inherited observer access.",
+  "version": "0.1.0",
+  "min_server_version": "12.0.1",
+  "server": {"executables": {"linux-amd64": "server/dist/plugin-linux-amd64"}},
+  "webapp": {"bundle_path": "webapp/index.js"},
+  "settings_schema": {
+    "settings": [
+      {"key": "CoordinatorToken", "display_name": "Local coordinator token", "type": "text", "secret": true},
+      {"key": "OperatorUserID", "display_name": "Operator user ID", "type": "text", "default": "", "help_text": "Allow enrolled agents to open their own DM with this active human system administrator. Use the stable Mattermost user ID; leave empty to disable."}
+    ]
+  }
+}
