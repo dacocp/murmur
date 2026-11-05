@@ -51,7 +51,11 @@ type threadSummary struct {
 }
 
 func (p *Plugin) threadRoot(actor, id string) (*model.Post, error) {
-	root, err := p.authorizedPost(actor, id)
+	return p.readThreadRoot(actor, id, 0)
+}
+
+func (p *Plugin) readThreadRoot(actor, id string, version int) (*model.Post, error) {
+	root, err := p.authorizedReadPost(actor, id, version)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +70,11 @@ func discussionRoot(post *model.Post) bool {
 }
 
 func (p *Plugin) conversationThreads(actor, channel string, r *http.Request) (map[string]any, error) {
-	c, err := p.access(actor, channel, false)
+	version, err := requestedReadVersion(r)
+	if err != nil {
+		return nil, err
+	}
+	c, err := p.contentRead(actor, channel, version)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +84,7 @@ func (p *Plugin) conversationThreads(actor, channel string, r *http.Request) (ma
 	}
 	before := r.URL.Query().Get("before")
 	if before != "" {
-		root, err := p.threadRoot(actor, before)
+		root, err := p.readThreadRoot(actor, before, version)
 		if err != nil {
 			return nil, err
 		}
@@ -146,11 +154,15 @@ func (p *Plugin) conversationThreads(actor, channel string, r *http.Request) (ma
 }
 
 func (p *Plugin) threadPage(actor, id string, r *http.Request) (map[string]any, error) {
-	root, err := p.threadRoot(actor, id)
+	version, err := requestedReadVersion(r)
 	if err != nil {
 		return nil, err
 	}
-	page, err := p.canonicalThreadPage(root, r, 20, func(id string) (*model.Post, error) { return p.authorizedPost(actor, id) })
+	root, err := p.readThreadRoot(actor, id, version)
+	if err != nil {
+		return nil, err
+	}
+	page, err := p.canonicalThreadPage(root, r, 20, func(id string) (*model.Post, error) { return p.authorizedReadPost(actor, id, version) })
 	if err == nil {
 		page["conversation"] = view(p.state.Conversations[root.ChannelId], actor)
 	}

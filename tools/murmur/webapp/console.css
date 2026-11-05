@@ -12,6 +12,7 @@
 .murmur-subtitle,.murmur-sync{font-size:12px;color:var(--m-muted);overflow-wrap:anywhere}
 .murmur-header-actions{display:flex;align-items:center;gap:10px}
 .murmur-error{padding:12px 24px;color:var(--error-text,#a32634);background:color-mix(in srgb,var(--error-text,#a32634) 8%,var(--m-bg));border-bottom:1px solid var(--m-line);white-space:pre-wrap}
+.murmur-readership{padding:10px 24px;border-bottom:1px solid var(--m-line);background:color-mix(in srgb,var(--m-accent) 6%,var(--m-bg));font-size:12px;line-height:1.6;overflow-wrap:anywhere;flex-shrink:0}
 .murmur-layout{display:grid;grid-template-columns:310px minmax(0,1fr);min-height:0;flex:1}
 .murmur-layout.murmur-has-thread{grid-template-columns:290px minmax(240px,1fr) minmax(320px,.9fr)}
 .murmur-sidebar{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--m-line);background:color-mix(in srgb,var(--m-fg) 2%,var(--m-bg))}

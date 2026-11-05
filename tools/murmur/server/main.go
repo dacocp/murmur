@@ -20,8 +20,9 @@ var buildRevision = "unversioned"
 var buildSourceHash = "unversioned"
 
 type configuration struct {
-	CoordinatorToken string `json:"coordinatortoken"`
-	OperatorUserID   string `json:"operatoruserid"`
+	CoordinatorToken              string `json:"coordinatortoken"`
+	OperatorUserID                string `json:"operatoruserid"`
+	AllowManagedConversationReads bool   `json:"allowmanagedconversationreads"`
 }
 
 type Plugin struct {
@@ -180,10 +181,10 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 	}
 	if path == "/v1/health" && r.Method == http.MethodGet {
 		writeJSON(w, map[string]any{"version": version, "reconciliation_error": p.lastErr,
-			"capabilities": map[string]any{"attachments": p.attachmentCapability()},
+			"capabilities": map[string]any{"attachments": p.attachmentCapability(), "managed_conversation_reads": p.managedReadCapability()},
 			"build": map[string]any{"revision": buildRevision, "source_sha256": buildSourceHash,
 				"compatibility": map[string]any{"attention_protocol": attentionProtocolVersion, "metadata_schema": metadataSchemaVersion,
-					"metadata_backend": metadataBackend, "mattermost": "12.0.1", "postgres_major": 16, "ledger_schema": 3}}})
+					"metadata_backend": metadataBackend, "mattermost": "12.0.1", "postgres_major": 16, "ledger_schema": 4}}})
 		return
 	}
 	result, err := p.route(strings.Split(strings.Trim(path, "/"), "/"), r)

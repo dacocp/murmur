@@ -21,9 +21,9 @@ def conversation_descriptor(value, channel):
             or value.get("role") not in (None, "member", "observer")
             or "role" not in value or type(value.get("open")) is not bool):
         raise RuntimeError("Invalid canonical conversation descriptor")
-    if value["role"] is None and (value["kind"] != "channel" or not value["open"]
-                                  or value.get("visibility") != "public"):
-        raise RuntimeError("Only public managed channels can be previewed without a grant")
+    visibility = "private" if value["kind"] == "dm" else "public" if value["open"] else "legacy-private"
+    if value.get("visibility") != visibility or value["kind"] == "dm" and value["open"]:
+        raise RuntimeError("Invalid canonical conversation visibility")
     return value
 
 
@@ -408,12 +408,16 @@ class Coordinator:
             anchor = page["root"]
             if anchor["id"] != root or anchor.get("root_id"):
                 raise RuntimeError("Server returned the wrong thread root")
+            if "conversation" in page:
+                conversation_descriptor(page["conversation"], channel)
             if anchor["channel_id"] != channel or any(post["channel_id"] != channel for post in page["posts"]):
                 raise RuntimeError("Thread belongs to another conversation")
             if any(post["id"] != root and post.get("root_id") != root for post in page["posts"]):
                 raise RuntimeError("Server returned a post from the wrong thread")
             return page
         page = self.backend.posts(actor, channel, limit, before)
+        if "conversation" in page:
+            conversation_descriptor(page["conversation"], channel)
         if any(post["channel_id"] != channel for post in page["posts"]):
             raise RuntimeError("Server returned history from another conversation")
         return page
@@ -481,6 +485,40 @@ class Coordinator:
             descriptor = conversation_descriptor(channel, channel["id"])
             if descriptor["kind"] != "channel" or not descriptor["open"]:
                 raise RuntimeError("Channel directory returned a non-public channel")
+        return page
+
+    def conversation_directory(self, actor, query="", kind=None, agent=None, limit=20, after=None):
+        """Discover managed references without membership, feed or inbox changes."""
+        self.ledger.actor(actor)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Conversation limit must be between 1 and 100")
+        if not isinstance(query, str) or kind not in (None, "dm", "channel"):
+            raise ValueError("Choose a text query and an optional dm or channel kind")
+        if agent is not None and (not isinstance(agent, str) or not agent.startswith(("codex:", "claude:"))):
+            raise ValueError("Use an agent actor ID from murmur agents")
+        page = self.backend.conversation_directory(actor, query, kind, agent, limit, after)
+        if (not isinstance(page, dict) or not isinstance(page.get("conversations"), list)
+                or len(page["conversations"]) > limit or "next_after" not in page
+                or page["next_after"] is not None and (not isinstance(page["next_after"], str) or not page["next_after"])):
+            raise RuntimeError("Invalid managed conversation directory")
+        seen = set()
+        for chat in page["conversations"]:
+            if not isinstance(chat, dict) or not isinstance(chat.get("id"), str) or not chat["id"]:
+                raise RuntimeError("Invalid canonical conversation descriptor")
+            descriptor = conversation_descriptor(chat, chat["id"])
+            if descriptor["id"] in seen or not isinstance(descriptor.get("purpose"), str):
+                raise RuntimeError("Invalid managed conversation directory")
+            seen.add(descriptor["id"])
+            participants = descriptor.get("participants")
+            if not isinstance(participants, list):
+                raise RuntimeError("Invalid managed conversation participants")
+            for participant in participants:
+                if (not isinstance(participant, dict) or participant.get("kind") not in ("agent", "human")
+                        or not isinstance(participant.get("id"), str) or not participant["id"]
+                        or not isinstance(participant.get("name"), str)
+                        or not isinstance(participant.get("username"), str)
+                        or participant["kind"] == "agent" and not participant["id"].startswith(("codex:", "claude:"))):
+                    raise RuntimeError("Invalid managed conversation participants")
         return page
 
     def agents(self, query="", limit=20, after=None, scope="server"):

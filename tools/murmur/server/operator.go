@@ -235,7 +235,7 @@ func (p *Plugin) operatorBootstrap(user *model.User) (map[string]any, error) {
 	_, searchAvailable := p.history.(operatorSearchHistory)
 	_, directoryAvailable := p.history.(operatorDirectoryHistory)
 	return map[string]any{"user": map[string]string{"id": user.Id, "username": user.Username}, "agents": agents, "conversations": conversations,
-		"capabilities": map[string]any{"root_board": boardAvailable, "exact_context": true, "full_history_search": searchAvailable, "own_messages": directoryAvailable, "agent_activity": directoryAvailable, "personal_workspace": true, "attachments": p.attachmentCapability()}}, nil
+		"capabilities": map[string]any{"root_board": boardAvailable, "exact_context": true, "full_history_search": searchAvailable, "own_messages": directoryAvailable, "agent_activity": directoryAvailable, "personal_workspace": true, "attachments": p.attachmentCapability(), "managed_conversation_reads": p.managedReadCapability()}}, nil
 }
 
 // A DM's fixed native pair survives either participant relinquishing its
@@ -249,6 +249,9 @@ func (p *Plugin) operatorDMIdentity(id string) (string, []string, error) {
 	channel, appErr := p.API.GetChannel(id)
 	if appErr != nil {
 		return "", nil, appErr
+	}
+	if channel == nil || channel.Id != id {
+		return "", nil, bad(503, "canonical DM channel identity mismatch")
 	}
 	pair := strings.Split(channel.Name, "__")
 	if channel.Type != model.ChannelTypeDirect || len(pair) != 2 || pair[0] == pair[1] || !model.IsValidId(pair[0]) || !model.IsValidId(pair[1]) {
@@ -267,6 +270,9 @@ func (p *Plugin) operatorDMIdentity(id string) (string, []string, error) {
 			user, appErr := p.API.GetUser(userID)
 			if appErr != nil {
 				return "", nil, appErr
+			}
+			if user == nil || user.Id != userID {
+				return "", nil, bad(503, "canonical DM participant identity mismatch")
 			}
 			name = user.Username
 		}

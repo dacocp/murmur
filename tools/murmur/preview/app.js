@@ -214,6 +214,14 @@
         }}, query, el('label', {class: 'scope-label', for: 'search-scope'}, 'Search in'), select, el('button', {type: 'submit'}, 'Find'));
         searchFormNode=form;return top;
     }
+    function sharedReadership() {
+        const capability = workspace?.capabilities?.managed_conversation_reads;
+        return capability?.version === 1 && capability.enabled === true;
+    }
+    function readershipNotice() {
+        return sharedReadership() ? el('p', {class:'readership-notice',role:'note'},
+            'Enrolled agents can read all Murmur-managed conversations, including DMs. Participants shown here can post; the list does not include everyone who can read.') : null;
+    }
     function shell() {
         const renderedRoute={...route};
         const main = el('main', {onscroll:()=>positions.set(routeKey(renderedRoute),scrollPosition()),id: 'main', tabindex: '-1',class:'view-'+route.view+(['conversation','thread'].includes(route.view)?' reader-view':''),'data-view':route.view});
@@ -221,7 +229,7 @@
             el('div', {class: 'brand'}, brandMark(), 'Murmur'), el('p',{class:'rail-label'},'Your workspace'), navigation(''), favoriteRail(), el('div', {class: 'foot'},
                 el('div',{class:'identity'},avatar(workspace.user.username,true),el('div',{class:'identity-copy'},el('strong', {}, workspace.user.username),el('p', {},'Personal workspace'))),
                 el('a', {href: '/', target: '_blank', rel: 'noopener'}, 'Open Mattermost ↗'))),
-            el('div', {class: 'workspace'}, toolbar(), main), navigation('bottom')));
+            el('div', {class: 'workspace'}, toolbar(), el('div', {id:'managed-readership',class:'readership-disclosure'}, readershipNotice()), main), navigation('bottom')));
         if (personal?.pending_saved) {
             const pending = personal.pending_saved;
             main.append(el('div', {class:'status',role:'alert'}, 'A saved-message change needs confirmation. Its original intent is kept.',
@@ -733,8 +741,8 @@
         }
         const memberAgents=(chat.members||[]).map(id=>workspace.agents.find(agent=>agent.id===id)).filter(Boolean);
         const observerAgents=(chat.observers||[]).map(id=>workspace.agents.find(agent=>agent.id===id)).filter(Boolean);
-        const audience=el('details',{class:'audience'},el('summary',{},icon('agents'),memberAgents.map(agent=>agent.name).join(', ') || kind(chat),' · Audience'),
-            el('div',{class:'audience-panel'},el('h3',{},'Direct participants'),
+        const audience=el('details',{class:'audience'},el('summary',{},icon('agents'),memberAgents.map(agent=>agent.name).join(', ') || kind(chat),sharedReadership() ? ' · Participants' : ' · Audience'),
+            el('div',{class:'audience-panel'},el('h3',{},sharedReadership() ? 'Who can post' : 'Direct participants'),
                 chat.dm_user_ids?.includes(workspace.user.id)?el('p',{},'You · '+workspace.user.username):null,
                 memberAgents.map(agent=>el('p',{class:'identity'},agent.name+' · '+agent.id)),
                 el('h3',{},'Inherited readers'),observerAgents.length?observerAgents.map(agent=>el('p',{class:'identity'},agent.name+' · '+agent.id)):el('p',{},'None listed'),
@@ -953,6 +961,8 @@
                     const fresh = await client.bootstrap();
                     if (!active || version !== routeVersion) return;
                     workspace = fresh; directoryDirty = false;
+                    const notice = readershipNotice();
+                    document.getElementById('managed-readership')?.replaceChildren(...(notice ? [notice] : []));
                     lastRefresh = new Date().toLocaleTimeString(undefined, {hour:'2-digit',minute:'2-digit'});
                 }
                 directory(main);

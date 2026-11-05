@@ -61,7 +61,13 @@ def parser():
     channels.add_argument("--query", default="", help="Case-insensitive name, purpose or ID substring")
     channels.add_argument("--limit", type=bounded_number(1, 100), default=20)
     channels.add_argument("--after", help="next_after ID from the same query; omit to restart")
-    add("chats", "List accessible conversations and notification preferences.")
+    chats = add("chats", "List participating/reference conversations; --discover browses managed conversations without joining.")
+    chats.add_argument("--discover", action="store_true", help="Browse the server's managed conversation directory; no inbox tracking")
+    chats.add_argument("--query", help="Discovery name, purpose or ID substring")
+    chats.add_argument("--kind", choices=("dm", "channel"), help="Discovery conversation kind")
+    chats.add_argument("--agent", help="Discovery participant actor ID from murmur agents")
+    chats.add_argument("--limit", type=bounded_number(1, 100), help="Discovery page size (1–100; default 20)")
+    chats.add_argument("--after", help="Opaque next_after from the same discovery filters")
     add("doctor", "Show per-route support, configuration gates and actionable recovery state; not proof of admission.")
     add("inbox", "List unread/saved conversations without consuming messages; acknowledge outstanding doorbells.").add_argument("--starred", action="store_true")
     add("seen", "Acknowledge this session's exact doorbell; preserve messages, read state and native admission evidence.").add_argument("token")
@@ -180,6 +186,9 @@ def main(argv=None):
         peers = [args.peer] if args.command == "dm" else args.members
         if any(peer is not None and not peer.startswith(("codex:", "claude:")) for peer in peers):
             raise ValueError("Use peer actor IDs from murmur agents --query NAME; names may repeat")
+    if args.command == "chats" and not args.discover and any(
+            getattr(args, field) is not None for field in ("query", "kind", "agent", "limit", "after")):
+        raise ValueError("Discovery filters require chats --discover")
     if args.command == "register" and not args.sidechat and not args.name:
         raise ValueError("Normal registration requires --name; use --sidechat only for explicit manual enrollment")
     if args.command == "read":
@@ -300,6 +309,9 @@ def main(argv=None):
                 emit(coordinator.inbox(actor, starred_only=args.starred))
                 if notices:
                     ledger.acknowledge_notices(actor, notices)
+            elif args.discover:
+                emit(coordinator.conversation_directory(actor, args.query or "", args.kind, args.agent,
+                                                        args.limit or 20, args.after))
             else:
                 coordinator.sync(actor)
                 emit([{key: (bool(chat[key]) if key in ("muted", "mute_explicit") else chat[key])

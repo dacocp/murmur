@@ -733,3 +733,48 @@ test('an unjournaled upload rejection can be explicitly removed without losing t
     assert.equal(h.count(uploadPath),1);assert.equal(h.count('posts'),0);
     assert.equal(h.calls.some(call=>call.options.method==='DELETE'),false);
 });
+
+
+test('managed readership notice distinguishes DM posting participants from readers', async t => {
+    const h = harness(t);
+    const data = {...workspace, agents:[{id:'codex:member',name:'Member',user_id:id('m')}],
+        conversations:[{id:channelA,name:'Human / Member',kind:'dm',members:['codex:member'],observers:[],dm_user_ids:[userId,id('m')]}],
+        capabilities:{...workspace.capabilities,managed_conversation_reads:{version:1,enabled:true}}};
+    await h.start(data);
+    const disclosure = h.find(node => node.className === 'readership-notice');
+    assert.equal(disclosure.attributes.role, 'note');
+    assert.match(disclosure.textContent, /Enrolled agents can read all Murmur-managed conversations, including DMs/);
+    assert.match(disclosure.textContent, /Participants shown here can post; the list does not include everyone who can read/);
+    await h.navigate({view:'conversation',conversation:channelA});
+    h.reply(boardPath(channelA),{posts:[],next_before:null}); await turn();
+    assert.ok(h.text().includes('Who can post'));
+    assert.ok(h.text().includes(' · Participants'));
+    assert.ok(h.text().includes('You · human'));
+    assert.ok(h.text().includes('Member · codex:member'));
+    assert.equal(h.text().includes(' · Audience'), false);
+    h.hide('visibility');
+    assert.equal(h.text().includes('Enrolled agents can read all'), false, 'suspension removes the workspace disclosure too');
+});
+
+test('existing bootstrap refresh updates readership disclosure without new requests', async t => {
+    const h = harness(t);
+    await h.start({...workspace,capabilities:{...workspace.capabilities,managed_conversation_reads:{version:1,enabled:false}}});
+    assert.equal(h.text().includes('Enrolled agents can read all'),false);
+    await h.navigate({view:'channels'});
+    h.reply('bootstrap',{...workspace,capabilities:{...workspace.capabilities,managed_conversation_reads:{version:1,enabled:true}}}); await turn();
+    assert.ok(h.text().includes('Enrolled agents can read all'));
+    await h.navigate({view:'conversations'});
+    h.reply('bootstrap',{...workspace,capabilities:{...workspace.capabilities,managed_conversation_reads:{version:1,enabled:false}}}); await turn();
+    assert.equal(h.text().includes('Enrolled agents can read all'),false);
+    assert.deepEqual(h.calls.map(call=>call.route),['bootstrap','bootstrap','bootstrap']);
+});
+
+test('readership notice stays hidden for missing, disabled or unsupported capability', async t => {
+    const cases = [undefined,null,{version:1,enabled:false},{version:2,enabled:true},{version:1,enabled:'true'}];
+    for (const capability of cases) await t.test(JSON.stringify(capability) || 'missing',async t => {
+        const h = harness(t);
+        await h.start({...workspace,capabilities:{...workspace.capabilities,managed_conversation_reads:capability}});
+        assert.equal(h.text().includes('Enrolled agents can read all'),false);
+        assert.deepEqual(h.calls.map(call=>call.route),['bootstrap']);
+    });
+});

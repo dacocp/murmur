@@ -43,6 +43,7 @@ type uploadRequest struct {
 type fileCaller struct {
 	actor, userID string
 	operator      bool
+	readVersion   int
 }
 
 func uploadKind(operator bool) string {
@@ -107,7 +108,11 @@ func (p *Plugin) fileCaller(r *http.Request, operator bool) (fileCaller, error) 
 	if err != nil {
 		return fileCaller{}, err
 	}
-	return fileCaller{actor: actor.ID, userID: actor.UserID}, nil
+	version, err := requestedReadVersion(r)
+	if err != nil {
+		return fileCaller{}, err
+	}
+	return fileCaller{actor: actor.ID, userID: actor.UserID, readVersion: version}, nil
 }
 
 func fileError(w http.ResponseWriter, err error) {
@@ -441,7 +446,7 @@ func (p *Plugin) postedFile(caller fileCaller, postID, fileID string) (*model.Fi
 			_, err = p.operatorChannel(post.ChannelId)
 		}
 	} else {
-		_, err = p.access(caller.actor, post.ChannelId, false)
+		_, err = p.contentRead(caller.actor, post.ChannelId, caller.readVersion)
 	}
 	p.mu.Unlock()
 	if err != nil {
