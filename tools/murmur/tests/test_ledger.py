@@ -82,7 +82,7 @@ class LedgerTests(unittest.TestCase):
                 path = directory / "operations.sqlite3"
                 with closing(sqlite3.connect(path, isolation_level=None)) as writer:
                     writer.execute("PRAGMA journal_mode=" + journal)
-                    writer.executescript("""PRAGMA user_version=5;
+                    writer.executescript("""PRAGMA user_version=6;
                         CREATE TABLE future_only(id INTEGER PRIMARY KEY, marker TEXT NOT NULL);
                         INSERT INTO future_only VALUES(1,'preserve future schema');""")
                     # SQLite readers update shared-memory read marks even in
@@ -105,7 +105,7 @@ class LedgerTests(unittest.TestCase):
                         return connection
 
                     with patch("murmur.ledger.sqlite3.connect", side_effect=capture):
-                        with self.assertRaisesRegex(LedgerError, "schema 5 is newer than supported schema 4"):
+                        with self.assertRaisesRegex(LedgerError, "schema 6 is newer than supported schema 5"):
                             Ledger(path)
                     self.assertEqual(persistent_files(), before)
                     self.assertEqual(sorted(file.name for file in directory.iterdir()), before_names)
@@ -114,7 +114,7 @@ class LedgerTests(unittest.TestCase):
                         connections[0].execute("SELECT 1")
                     db = connect(path, isolation_level=None)
                     try:
-                        self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 5)
+                        self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 6)
                         self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], journal)
                         self.assertEqual(db.execute("SELECT * FROM future_only").fetchall(), [(1, "preserve future schema")])
                         self.assertEqual(db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [("future_only",)])
@@ -141,7 +141,7 @@ class LedgerTests(unittest.TestCase):
                 db.close()
                 ledger = Ledger(path)
                 try:
-                    self.assertEqual(ledger.db.execute("PRAGMA user_version").fetchone()[0], 4)
+                    self.assertEqual(ledger.db.execute("PRAGMA user_version").fetchone()[0], 5)
                     retained = ledger.db.execute("""SELECT actor,name,identity_json,user_id,enrolled_at,
                         updated_at,cursor,generation,causal_json FROM actors""").fetchone()
                     self.assertEqual(tuple(retained), old_actor)
@@ -533,7 +533,7 @@ class LedgerTests(unittest.TestCase):
             receipts = db.execute("SELECT * FROM receipts").fetchall()
             actors = db.execute("SELECT * FROM actors").fetchall()
         self.ledger = Ledger(self.path, clock=lambda: self.now)
-        self.assertEqual(self.ledger.db.execute("PRAGMA user_version").fetchone()[0], 4)
+        self.assertEqual(self.ledger.db.execute("PRAGMA user_version").fetchone()[0], 5)
         self.assertEqual([tuple(row) for row in self.ledger.db.execute(
             "SELECT " + ",".join(old_columns) + " FROM attempts")], frozen)
         self.assertEqual([tuple(row) for row in self.ledger.db.execute("SELECT * FROM receipts")], receipts)
@@ -544,7 +544,7 @@ class LedgerTests(unittest.TestCase):
         self.ingest(self.post("B", when=102))
         self.assertEqual(self.ledger.create_attempt("a", "epoch", "new-notice")["post_ids"], ["B"])
         with patch("murmur.ledger.LEDGER_SCHEMA_VERSION", 3), self.assertRaisesRegex(
-                LedgerError, "schema 4 is newer than supported schema 3"):
+                LedgerError, "schema 5 is newer than supported schema 3"):
             Ledger(self.path)
         self.assertEqual(len(self.ledger.pending_attempts("a")), 2)
 

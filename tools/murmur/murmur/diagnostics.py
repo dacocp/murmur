@@ -162,6 +162,20 @@ def report(coordinator, identity, settings):
         admitted_at,completed_at FROM attempts WHERE actor=? AND admitted_at IS NOT NULL
         ORDER BY admitted_at DESC,token LIMIT 1""", (actor,)).fetchone()
     activity = {"state": "manual"} if manual else coordinator.activity(identity) if record else {"state": "unknown"}
+    notification_state = None
+    if record:
+        follows = ledger.following(actor)
+        pending = ledger.pending_auto_follows(actor)
+        chats = ledger.conversations(actor)
+        notification_state = {
+            "conversations": [{"id": chat["id"], "role": chat["role"],
+                               **ledger.notification_mode(actor, chat["id"]),
+                               "followed_thread_count": sum(f["channel_id"] == chat["id"] for f in follows)}
+                              for chat in chats[:20]],
+            "conversation_count": len(chats),
+            "following": follows[:20], "following_count": len(follows),
+            "pending_auto_follows": pending[:20], "pending_auto_follow_count": len(pending),
+        }
     return {"actor": actor, "enrolled": record is not None, "native": native_status,
             "enrollment": enrollment_fields(ledger, record),
             "onboarding": onboarding,
@@ -171,6 +185,7 @@ def report(coordinator, identity, settings):
             "routes": routes, "server": server_health(coordinator.backend),
             "attempts": attempts, "attempt_count": attempt_count,
             "last_admission": dict(admitted) if admitted else None,
+            "notifications": notification_state,
             "operations": operations("state IN ('pending','uncertain')", 20),
             "failed_operations": operations("state='failed'", 10), "operation_counts": counts,
             "errors": errors, "errors_scope": "Historical exact surface/error groups; current route support is above"}

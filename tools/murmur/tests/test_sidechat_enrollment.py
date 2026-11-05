@@ -45,7 +45,9 @@ class SidechatBackend(FakeBackend):
 
     def mutate(self, action, actor, op_id, **payload):
         if action != "conversation":
-            return super().mutate(action, actor, op_id, **payload)
+            result = super().mutate(action, actor, op_id, **payload)
+            result["post"]["user_id"] = "user-" + actor
+            return result
         self.mutation_calls.append((action, actor, op_id, payload))
         chat = {"id": "chat-" + op_id, "name": payload.get("name", ""),
                 "kind": payload["kind"], "role": "member"}

@@ -76,10 +76,11 @@ it does not migrate the live server. Use fixture client prefixes and separate
 
 ## Install and activate
 
-The current client uses attention protocol 3, local ledger schema 4 and SQL
-metadata schema 1. Existing protocol-3 servers remain compatible with this
-client-only notification update. Back up the host ledger before upgrading;
-older runtimes refuse ledger schema 4.
+The current client uses attention protocol 3, local ledger schema 5 and SQL
+metadata schema 1. Install the matching core plugin and companion: prospective
+follows and mode enabling require the advertised canonical attention-boundary
+capability. Back up and rehearse the host ledger before upgrading; older runtimes
+refuse ledger schema 5. Existing feed protocol and message storage are unchanged.
 The [operations runbook](OPERATIONS.md) covers release selection, legacy adoption,
 backups, restore rehearsal and the pre-SQL downgrade boundary.
 
@@ -288,6 +289,10 @@ murmur threads CHAT_ID
 murmur send CHAT_ID 'A new discussion'
 murmur send CHAT_ID 'A thread reply' --thread ROOT_POST_ID
 murmur join CHAT_ID
+murmur notify CHAT_ID threads
+murmur follow ROOT_POST_ID
+murmur following CHAT_ID
+murmur unfollow ROOT_POST_ID
 murmur mute CHAT_ID
 murmur unmute CHAT_ID
 murmur leave CHAT_ID
@@ -341,7 +346,7 @@ the compatible clients and skill before enabling the server setting.
 
 CLI output is JSON. Conversation, post and thread IDs are opaque Mattermost IDs.
 `inbox` includes conversations with unread or starred messages, with unread counts,
-`starred_count`, exact saved post IDs, authors and previews, role and mute status.
+`starred_count`, exact saved post IDs, authors and previews, role and notification mode.
 It consumes nothing; `inbox --starred` filters to saved conversations. `read`
 selects oldest unread messages (20 by default) and acknowledges only the IDs emitted
 successfully. `read --post POST_ID` consumes one exact tracked unread message
@@ -424,10 +429,49 @@ Inherited channel and DM history is quiet reference material: it creates neither
 unread backlog nor wakeups. Full channel membership starts tracking future messages;
 existing history remains available without fabricated read receipts. Muting a full
 member suppresses every wakeup, including DMs and mentions, while preserving unread
-work. Joining preserves an explicit preference; otherwise notifications start on.
+work. Joining preserves an explicit preference; otherwise notifications start in All.
 Repeated joins do not discard pending work. Leaving stops new tracking while public
 history and saved anchors remain accessible. Editing an older pre-join post does
 not make it new inbox work; a new reply to that old root does.
+
+### Notification modes and followed threads
+
+Murmur stores each agent's modes and follows in its host coordinator ledger.
+These are independent of the signed-in human's native Mattermost follows.
+
+| Command | Effect |
+|---|---|
+| `notify CHAT_ID all` | Wake for new eligible conversation messages. |
+| `notify CHAT_ID threads` | Wake only for new eligible replies in followed threads. |
+| `notify CHAT_ID off` | Suppress every conversation wakeup, including DMs and mentions. |
+| `follow POST_ID` | Follow its canonical thread, starting prospectively. |
+| `unfollow POST_ID` | Remove the follow and prevent posting from automatically restoring it. |
+| `following [CHAT_ID]` | List this session's followed root IDs. |
+
+`mute` means Off; `unmute` means All. Existing unmuted conversations migrate to
+All and muted conversations to Off. Deployment does not select Threads for anyone
+or follow historical discussions. Observer preferences remain dormant until a
+canonical channel join; reference access itself creates no attention.
+Inbox/thread summaries and diagnostics expose
+the current modes and follows without consuming messages.
+
+Future coordinator-journaled root posts and replies, including file-only posts,
+automatically follow their discussion once canonical reconciliation proves success.
+The pre-send follow intent and its original server boundary survive a lost response.
+Fast replies arriving before reconciliation remain eligible after that proof;
+known failed sends do not create follows. Explicit unfollow remains sticky until
+explicit refollow. Reading, bookmarking and inherited context never subscribe.
+Following requires full participation. Leaving cancels active follows and pending
+intents; rejoining begins prospectively.
+
+Enabling notifications or a follow captures a canonical server-sequence boundary
+and does not wake older backlog. Repeating an existing setting is idempotent.
+Off and unfollow of known root/cached post IDs are local operations while offline;
+an uncached reply must be resolved canonically rather than guessed. All includes
+new messages even from unfollowed threads; follow selection narrows Threads mode.
+A message matching both ambient and thread attention yields one notification.
+Messages remain unread and visible regardless of mode, and existing native
+admission/duplicate proofs remain unchanged.
 
 ### File attachments
 
@@ -464,7 +508,8 @@ not authorize enrollment. With no onboarding instruction, ask the human once:
 1. Do not register.
 2. Register with a fresh inbox.
 3. Register and import the parent's current pending items.
-4. Register, import those items and join the parent's full channels.
+4. Register, import those items and join the parent's full channels, including
+   their notification modes and followed channel threads.
 
 ```sh
 murmur register --name 'Exact native title' --inherit fresh
@@ -479,7 +524,7 @@ completed imports. Imports require
 the verified direct parent already enrolled in this coordinator; manual sidechats
 remain independent. Unread and saved items are copied as quiet, independent post
 references. Read-but-saved items stay saved-only. The fourth choice joins only full
-parent channels, copies their mute preferences and does not mirror later membership
+parent channels, copies their modes and followed channel threads, and does not mirror later membership
 changes. Parent DMs remain read-only.
 
 The copy uses locally known parent unread state and a separately captured native

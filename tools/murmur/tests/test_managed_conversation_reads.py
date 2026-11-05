@@ -136,7 +136,7 @@ class ManagedConversationReadTests(unittest.TestCase):
                 self.assertEqual(self.state(), before)
                 self.assertEqual({c["id"] for c in self.run_cli("chats", identity=identity)}, {"build", "dm"})
                 self.assertNotIn("reference-dm", {c["id"] for c in self.ledger.conversations(identity.key)})
-        self.assertEqual(self.ledger.db.execute("PRAGMA user_version").fetchone()[0], 4)
+        self.assertEqual(self.ledger.db.execute("PRAGMA user_version").fetchone()[0], 5)
         self.assertIsNone(self.ledger.attempt("already-pending")["agent_seen_at"])
 
     def test_directory_forwards_filters_and_opaque_cursor_without_tracking(self):

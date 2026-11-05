@@ -115,6 +115,9 @@ func (p *Plugin) route(parts []string, r *http.Request) (any, error) {
 		}
 		if len(parts) == 4 {
 			channel := parts[2]
+			if get && parts[3] == "attention-boundary" {
+				return p.attentionBoundary(actor, channel)
+			}
 			if post && (parts[3] == "join" || parts[3] == "leave") {
 				var req memberRequest
 				if err := decode(r, &req); err != nil {

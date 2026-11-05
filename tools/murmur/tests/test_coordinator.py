@@ -36,6 +36,17 @@ class FakeBackend:
         self.commit_before_failure = True
         self.before_mutation = None
 
+    def request(self, method, path):
+        if (method, path) == ("GET", "/health"):
+            return {"capabilities": {"attention_boundaries": {"version": 1}}}
+        raise AssertionError("Unexpected fixture request")
+
+    def attention_boundary(self, actor, channel):
+        chat = next((c for c in self.conversations(actor) if c["id"] == channel), None)
+        if chat is None or chat["role"] != "member":
+            raise BackendError("Full membership required", status=403)
+        return {"conversation_id": channel, "after_seq": len(self.events)}
+
     def register(self, actor, name, parent, *, username_prefix=None, enrollment_id=None, lineage=None, mode=None):
         self.register_calls.append((actor, name, parent))
         self.register_prefixes.append(username_prefix)
@@ -115,7 +126,8 @@ class FakeBackend:
         if self.before_mutation:
             self.before_mutation(op_id)
         result = {"post": {"id": "reply-" + op_id, "channel_id": payload["channel_id"],
-                           "message": payload["message"], "root_id": payload.get("root_id", "")}}
+                           "message": payload["message"], "root_id": payload.get("root_id", ""),
+                           "user_id": "self"}}
         if self.commit_before_failure:
             self.operations[op_id] = {"status": "complete", "result": result}
         if self.lose_response:

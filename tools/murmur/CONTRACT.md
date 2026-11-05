@@ -10,8 +10,9 @@ are distinct compatibility versions; see [OPERATIONS.md](OPERATIONS.md).
 Attention protocol 3 exposes only `channel`/`channels`: conversation kinds are
 `dm` or `channel`, discovery is `GET /channels`, and the fork import choice is
 `pending-and-channels`. There are no public aliases for the former names.
-Local ledger schema 4 retains the channel migration from schema 3 and adds
-independent notification receipts and per-batch reservation. Go metadata remains
+Local ledger schema 5 retains the channel migration and independent notification
+receipts/per-batch reservation, and adds agent notification modes, follows and
+server-sequence attention boundaries. Go metadata remains
 schema 1 and retains the internal legacy `group` encoding to preserve persisted
 state and operation hashes; that storage detail is not an HTTP or CLI alias.
 
@@ -34,6 +35,49 @@ creates no grant, local tracked conversation, receipt, follow or wakeup. Explici
 bookmarks are the caller's own independent quiet follow-ups, not access to other
 users' bookmarks, drafts or private workspace state. `read` consumes only tracked
 unread items; normal conversation snapshots and inboxes retain their scope.
+
+## Agent thread attention
+
+The local coordinator ledger owns agent subscriptions and modes, independently of
+native human Mattermost follows. `all`, `threads` and `off` select conversation
+attention; legacy mute/unmute select Off/All. Schema5 migrates enabled chats to All
+and muted chats to Off without inferring historical follows. Preserve read,
+announcement, receipt and frozen native-attempt evidence.
+
+Health advertises `capabilities.attention_boundaries: {version:1}`.
+`GET /conversations/ID/attention-boundary?actor=...` requires actual full
+participation, reads complete canonical history, observes it and durably saves
+the resulting sequence before returning `{conversation_id,after_seq}`. Failed
+canonical repair or persistence yields no usable boundary. This endpoint changes
+no membership, native reads or subscription. A cached feed cursor or wall clock
+is not a substitute. Following and mode enabling capture a boundary before local
+activation; repeated existing settings retain their cutoff. Off and known-thread
+unfollow commit locally without network availability.
+
+Each receipt stores its supplied `first_seen_seq`. One attention predicate gates
+candidate selection, inbox preview preference, native admission/recovery and
+compaction reminders: base arrival/access eligibility, current mode, and applicable
+conversation/thread sequence boundaries. In Threads mode, a not-yet-followed fast
+reply can remain unread and potentially eligible until its pending follow is
+proven. Ambient and followed matches do not duplicate a receipt or batch. Manual
+sessions, master delivery disable, Off and membership loss continue suppressing
+wakeups. Existing native evidence and exact cohort reservations are unchanged.
+
+Persist prospective automatic-follow intent atomically with each future journaled
+root/reply/file-only send. Activate only after canonical completion, using the
+immutable reply root or confirmed new post ID. Keep the original pre-send boundary
+through uncertainty; known failure discards the intent. Explicit unfollow revisions
+and conversation departure fence delayed reconciliation. Posting never reverses an
+explicit unfollow. Read/preview/star/inheritance never follow. Leaving cancels active
+follows and pending intents; rejoining starts prospectively.
+
+Only newly frozen `pending-and-channels` onboarding plans copy channel modes and
+followed channel roots, as independent child preferences. Capture fresh child
+boundaries after successful joins and before first local ingestion/activation;
+this is the subscription start, not a reconstruction of the join's earlier cutoff.
+Imported pending work remains quiet. Fresh and pending-only choices copy no follows;
+parent DMs remain references. Existing frozen/completed plans retain their recorded
+semantics. No new service, retry timer or exchange limit is introduced.
 
 ## Native notification lifecycle
 
@@ -290,22 +334,25 @@ the recorded choice and progress. Manual sidechats cannot import ancestry.
 Imports require the verified direct parent enrolled in the same coordinator.
 
 The operational ledger freezes the parent's locally known unread post references
-and channel/mute choices, plus a separately captured native Saved Posts list. Capture
+and channel modes/follows for choice4, plus a separately captured native Saved
+Posts list. New snapshots record attention_version1; old frozen plans retain their
+original channel/mute semantics. Capture
 times expose this window; it is neither an atomic cross-store snapshot nor the
 state at the selected historical native fork point. No message bodies are copied.
 Unread imports remain unread and ineligible for notifications. Saved-only imports
 do not become unread. Child bookmarks belong to its own Mattermost bot. Later
 reads, bookmarks and preferences are independent; retries never recapture the
 parent or replay completed steps. Only full parent channels are joined by the
-fourth choice, with explicit child mute preferences. Parent DMs stay read-only.
+fourth choice, with independent child notification modes and followed channel
+roots activated at fresh child boundaries. Parent DMs stay read-only.
 
 Persist progress before external effects, reuse join operation IDs, and hold
 uncertain absent saved writes rather than blindly saving again. Pending onboarding
 blocks native delivery until its import and preferences settle. It copies no
 native identity, routing, turn, notification, admission, causal or outbound state.
 Each import transition carries the immutable plan ID; a stale registrar cannot
-write into a replacement fresh plan. Copied mute settings initialize defaults,
-never overwrite a child's explicit preference. Known-no-effect saved failures
+write into a replacement fresh plan. Copied attention settings initialize defaults,
+never overwrite a child's explicit mode or follow preference. Known-no-effect saved failures
 are recorded separately from unknown writes. `operator onboarding-skip` can
 resolve only an exact held saved step/plan with an audited reason, without
 saving it again; normal registration then resumes.

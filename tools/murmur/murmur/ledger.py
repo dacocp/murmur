@@ -18,7 +18,7 @@ import uuid
 from .protocol import ATTENTION_VERSION
 
 
-LEDGER_SCHEMA_VERSION = 4
+LEDGER_SCHEMA_VERSION = 5
 
 
 class LedgerError(ValueError):
@@ -242,6 +242,42 @@ class Ledger:
                 # Existing unannounced history has no proven arrival attention
                 # state. Preserve unread mail, but never replay it as a wakeup.
                 self.db.execute("ALTER TABLE receipts ADD COLUMN notification_eligible INTEGER NOT NULL DEFAULT 0")
+            if "first_seen_seq" not in columns:
+                self.db.execute("ALTER TABLE receipts ADD COLUMN first_seen_seq INTEGER")
+            conversation_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(conversations)")}
+            for name, definition in (
+                ("notification_mode", "TEXT NOT NULL DEFAULT 'all'"),
+                ("attention_after_seq", "INTEGER NOT NULL DEFAULT 0"),
+                ("attention_revision", "INTEGER NOT NULL DEFAULT 0"),
+                ("membership_revision", "INTEGER NOT NULL DEFAULT 0"),
+                ("leave_op_id", "TEXT"),
+            ):
+                if name not in conversation_columns:
+                    self.db.execute("ALTER TABLE conversations ADD COLUMN " + name + " " + definition)
+            if "notification_mode" not in conversation_columns:
+                self.db.execute("UPDATE conversations SET notification_mode=CASE WHEN muted THEN 'off' ELSE 'all' END")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS thread_follows (
+                actor TEXT NOT NULL, channel_id TEXT NOT NULL, root_id TEXT NOT NULL,
+                followed INTEGER NOT NULL, explicit_unfollow INTEGER NOT NULL DEFAULT 0,
+                after_seq INTEGER NOT NULL, revision INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                PRIMARY KEY(actor,channel_id,root_id),
+                FOREIGN KEY(actor,channel_id) REFERENCES conversations(actor,id))""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS thread_aliases (
+                actor TEXT NOT NULL REFERENCES actors(actor), post_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL, root_id TEXT NOT NULL, PRIMARY KEY(actor,post_id))""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS auto_follow_intents (
+                op_id TEXT PRIMARY KEY REFERENCES outbound(op_id), actor TEXT NOT NULL,
+                channel_id TEXT NOT NULL, root_id TEXT NOT NULL, after_seq INTEGER NOT NULL,
+                membership_revision INTEGER NOT NULL, follow_revision INTEGER NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending',
+                FOREIGN KEY(actor,channel_id) REFERENCES conversations(actor,id))""")
+            # Automatic settlement order must not create a new explicit preference
+            # generation. Keep an independent fence for user choices and imports.
+            for table in ("thread_follows", "auto_follow_intents"):
+                if "explicit_revision" not in {row["name"] for row in self.db.execute("PRAGMA table_info(" + table + ")")}:
+                    self.db.execute("ALTER TABLE " + table + " ADD COLUMN explicit_revision INTEGER NOT NULL DEFAULT 0")
+            if "explicit_after_seq" not in {row["name"] for row in self.db.execute("PRAGMA table_info(thread_follows)")}:
+                self.db.execute("ALTER TABLE thread_follows ADD COLUMN explicit_after_seq INTEGER NOT NULL DEFAULT 0")
             turn_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(native_turns)")}
             if "identity_json" not in turn_columns:
                 # A mutable actor target cannot reconstruct a past owner's
@@ -426,9 +462,68 @@ class Ledger:
                 WHERE actor=? AND available=1 AND kind='channel' AND role='member' ORDER BY id""",
                 (plan["source_actor"],))] if plan["choice"] == "pending-and-channels" else []
             snapshot = {"unread": unread, "channels": channels, "local_captured_at": self.clock()}
+            if plan["choice"] == "pending-and-channels":
+                snapshot["attention_version"] = 1
+                for channel in channels:
+                    channel["notification_mode"] = self.notification_mode(plan["source_actor"], channel["id"])["mode"]
+                    channel["followed_threads"] = [f["root_id"] for f in self.following(plan["source_actor"], channel["id"])]
             self.db.execute("UPDATE onboarding SET snapshot_json=?,updated_at=? WHERE actor=?",
                             (_json(snapshot), self.clock(), actor))
         return snapshot
+
+    def freeze_channel_attention_boundary(self, actor, plan_id, channel_id, after_seq, *, expected_membership_revision=None):
+        """Record the first successful boundary once; retries cannot move a frozen cutoff."""
+        self._sequence(after_seq)
+        with self._write():
+            plan = self.require_onboarding(actor, plan_id)
+            snapshot = plan["snapshot"]
+            if (not snapshot or snapshot.get("attention_version") != 1
+                    or plan["choice"] != "pending-and-channels"
+                    or channel_id not in {c["id"] for c in snapshot["channels"]}):
+                raise LedgerError("Onboarding plan has no versioned channel attention")
+            boundaries = snapshot.setdefault("attention_boundaries", {})
+            if channel_id not in boundaries:
+                chat = self._conversation_attention(actor, channel_id, member=True)
+                if (expected_membership_revision is not None
+                        and expected_membership_revision != chat["membership_revision"]):
+                    raise LedgerError("Child channel membership changed while capturing its attention boundary")
+                boundaries[channel_id] = after_seq
+                snapshot.setdefault("attention_membership_revisions", {})[channel_id] = chat["membership_revision"]
+                self.db.execute("UPDATE onboarding SET snapshot_json=?,updated_at=? WHERE actor=? AND plan_id=?",
+                                (_json(snapshot), self.clock(), actor, plan_id))
+        return boundaries[channel_id]
+
+    def apply_channel_attention(self, actor, plan_id, channel_id, mode, follows, after_seq):
+        """Copy independent intent and its progress atomically; explicit child choices win."""
+        with self._write():
+            plan = self.require_onboarding(actor, plan_id)
+            snapshot = plan["snapshot"] or {}
+            frozen = next((c for c in snapshot.get("channels", []) if c["id"] == channel_id), None)
+            if (snapshot.get("attention_version") != 1 or plan["choice"] != "pending-and-channels"
+                    or not frozen or mode != frozen.get("notification_mode")
+                    or sorted(follows) != sorted(frozen.get("followed_threads", []))
+                    or snapshot.get("attention_boundaries", {}).get(channel_id) != after_seq):
+                raise LedgerError("Channel attention does not match its frozen onboarding plan")
+            self._sequence(after_seq)
+            key = "attention:" + channel_id
+            if plan["progress"].get(key) == "done":
+                return False
+            chat = self._conversation_attention(actor, channel_id, member=True)
+            if snapshot.get("attention_membership_revisions", {}).get(channel_id) != chat["membership_revision"]:
+                raise LedgerError("Child channel membership changed after the frozen attention boundary")
+            if not chat["mute_explicit"]:
+                self.db.execute("""UPDATE conversations SET notification_mode=?,muted=?,mute_explicit=1,
+                    attention_after_seq=?,attention_revision=attention_revision+1 WHERE actor=? AND id=?""",
+                    (mode, mode == "off", after_seq, actor, channel_id))
+            for root in follows:
+                old = self.thread_attention(actor, channel_id, root)
+                if not old["revision"]:
+                    self._put_follow(actor, channel_id, root, True, False, after_seq, 1)
+            self._suppress_unannounced(actor)
+            plan["progress"][key] = "done"
+            self.db.execute("UPDATE onboarding SET progress_json=?,updated_at=? WHERE actor=? AND plan_id=?",
+                            (_json(plan["progress"]), self.clock(), actor, plan_id))
+        return True
 
     def capture_saved(self, actor, plan_id, post_ids, started_at, finished_at):
         with self._write():
@@ -467,8 +562,8 @@ class Ledger:
                 if not self.db.execute("SELECT 1 FROM conversations WHERE actor=? AND id=? AND available=1 AND role='member'",
                                        (actor, channel)).fetchone():
                     raise LedgerError("Imported channel membership changed; retry registration")
-                self.db.execute("""UPDATE conversations SET muted=?,mute_explicit=1
-                    WHERE actor=? AND id=? AND mute_explicit=0""", (bool(mute), actor, channel))
+                self.db.execute("""UPDATE conversations SET muted=?,mute_explicit=1,notification_mode=?
+                    WHERE actor=? AND id=? AND mute_explicit=0""", (bool(mute), "off" if mute else "all", actor, channel))
                 self._suppress_unannounced(actor)
             plan["progress"][key] = state
             self.db.execute("UPDATE onboarding SET progress_json=?,updated_at=? WHERE actor=?",
@@ -539,15 +634,33 @@ class Ledger:
             self._sync_conversations(actor, snapshots)
 
     def _sync_conversations(self, actor, snapshots):
+        previous = {row["id"]: dict(row) for row in self.db.execute(
+            "SELECT * FROM conversations WHERE actor=?", (actor,))}
+        incoming = {chat["id"]: chat for chat in snapshots}
+        for channel, old in previous.items():
+            chat = incoming.get(channel)
+            if old["available"] and old["role"] == "member" and (not chat or chat["role"] != "member"):
+                self._revoke_channel_attention(actor, channel)
+            if not chat or chat["role"] != "member":
+                self.db.execute("UPDATE conversations SET leave_op_id=NULL WHERE actor=? AND id=?", (actor, channel))
         self.db.execute("UPDATE conversations SET available=0 WHERE actor=?", (actor,))
         for chat in snapshots:
             if chat["role"] not in ("member", "observer") or chat["kind"] not in ("dm", "channel"):
                 raise LedgerError("Invalid conversation role or kind")
-            self.db.execute("""INSERT INTO conversations(actor,id,name,kind,role,muted)
-                VALUES(?,?,?,?,?,?) ON CONFLICT(actor,id) DO UPDATE SET
+            old = previous.get(chat["id"])
+            rejoined = bool(old and (not old["available"] or old["role"] != "member") and chat["role"] == "member")
+            self.db.execute("""INSERT INTO conversations(actor,id,name,kind,role,muted,notification_mode)
+                VALUES(?,?,?,?,?,?,?) ON CONFLICT(actor,id) DO UPDATE SET
                 name=excluded.name,kind=excluded.kind,role=excluded.role,available=1,
-                muted=CASE WHEN conversations.mute_explicit THEN conversations.muted ELSE excluded.muted END""",
-                (actor, chat["id"], chat["name"], chat["kind"], chat["role"], chat["role"] == "observer"))
+                muted=CASE WHEN conversations.mute_explicit THEN conversations.muted ELSE excluded.muted END,
+                notification_mode=CASE WHEN conversations.mute_explicit THEN conversations.notification_mode
+                    ELSE excluded.notification_mode END""",
+                (actor, chat["id"], chat["name"], chat["kind"], chat["role"], chat["role"] == "observer",
+                 "off" if chat["role"] == "observer" else "all"))
+            if rejoined:
+                self.db.execute("""UPDATE conversations SET membership_revision=membership_revision+1,
+                    attention_revision=attention_revision+1,attention_after_seq=MAX(attention_after_seq,?)
+                    WHERE actor=? AND id=?""", (self._require_actor(actor)["cursor"], actor, chat["id"]))
         self._suppress_unannounced(actor)
 
     def conversations(self, actor):
@@ -555,21 +668,192 @@ class Ledger:
         return [dict(r) for r in self.db.execute(
             "SELECT * FROM conversations WHERE actor=? AND available=1 ORDER BY name,id", (actor,))]
 
-    def set_mute(self, actor, channel_id, muted):
+    def _conversation_attention(self, actor, channel_id, *, member=False):
+        self._require_actor(actor)
+        row = self.db.execute("SELECT * FROM conversations WHERE actor=? AND id=? AND available=1",
+                              (actor, channel_id)).fetchone()
+        if not row or member and (row["role"] != "member" or row["leave_op_id"] is not None):
+            raise LedgerError("Conversation requires current full membership" if member else "Conversation is not accessible")
+        return row
+
+    @staticmethod
+    def _sequence(after_seq):
+        if type(after_seq) is not int or after_seq < 0:
+            raise LedgerError("A canonical nonnegative attention boundary is required")
+        return after_seq
+
+    def notification_mode(self, actor, channel_id):
+        row = self._conversation_attention(actor, channel_id)
+        return {"mode": row["notification_mode"], "revision": row["attention_revision"],
+                "membership_revision": row["membership_revision"], "after_seq": row["attention_after_seq"],
+                "active": row["role"] == "member" and row["leave_op_id"] is None
+                    and self._require_actor(actor)["mode"] == "native"}
+
+    def set_notification_mode(self, actor, channel_id, mode, *, after_seq=None, expected_revision=None,
+                              expected_membership_revision=None):
+        if mode not in ("all", "threads", "off"):
+            raise LedgerError("Notification mode must be all, threads or off")
         with self._write():
-            changed = self.db.execute("""UPDATE conversations SET muted=?,mute_explicit=1
-                WHERE actor=? AND id=? AND available=1""", (bool(muted), actor, channel_id)).rowcount
-            if not changed:
-                raise LedgerError("Conversation is not accessible")
-            if muted:
+            row = self._conversation_attention(actor, channel_id)
+            if mode != "off" and row["role"] == "member" and row["leave_op_id"] is not None:
+                raise LedgerError("Conversation leave is pending; attention cannot be enabled")
+            if ((expected_revision is not None and expected_revision != row["attention_revision"])
+                    or (expected_membership_revision is not None
+                        and expected_membership_revision != row["membership_revision"])):
+                raise LedgerError("Conversation attention changed while capturing its boundary; retry")
+            if row["notification_mode"] != mode:
+                boundary = (row["attention_after_seq"] if mode == "off" or row["role"] != "member"
+                            else self._sequence(after_seq))
+                self.db.execute("""UPDATE conversations SET notification_mode=?,muted=?,mute_explicit=1,
+                    attention_after_seq=?,attention_revision=attention_revision+1 WHERE actor=? AND id=?""",
+                    (mode, mode == "off", boundary, actor, channel_id))
+            else:
+                # Even an explicit repeat makes a default choice independent of later role changes.
+                self.db.execute("""UPDATE conversations SET mute_explicit=1,
+                    attention_revision=attention_revision+1 WHERE actor=? AND id=?""", (actor, channel_id))
+            if mode == "off":
                 self._suppress_unannounced(actor)
+        return self.notification_mode(actor, channel_id)
+
+    def set_mute(self, actor, channel_id, muted):
+        # Compatibility for local callers. Network-facing enable operations capture a server boundary.
+        return self.set_notification_mode(actor, channel_id, "off" if muted else "all",
+                                          after_seq=self._require_actor(actor)["cursor"])
+
+    def _revoke_channel_attention(self, actor, channel_id):
+        self.db.execute("""UPDATE conversations SET attention_revision=attention_revision+1,
+            membership_revision=membership_revision+1 WHERE actor=? AND id=?""", (actor, channel_id))
+        self.db.execute("""UPDATE thread_follows SET followed=0,revision=revision+1,explicit_revision=explicit_revision+1,updated_at=?
+            WHERE actor=? AND channel_id=? AND followed=1""", (self.clock(), actor, channel_id))
+        self.db.execute("UPDATE auto_follow_intents SET state='cancelled' WHERE actor=? AND channel_id=? AND state='pending'",
+                        (actor, channel_id))
+        self.db.execute("""UPDATE receipts SET notification_eligible=0 WHERE actor=? AND announced_at IS NULL
+            AND post_id IN (SELECT id FROM posts WHERE channel_id=?)""", (actor, channel_id))
+
+    def revoke_channel_attention(self, actor, channel_id):
+        """Fence leave before HTTP, including a response that is subsequently lost."""
+        with self._write():
+            self._conversation_attention(actor, channel_id)
+            self._revoke_channel_attention(actor, channel_id)
+
+    begin_leave = revoke_channel_attention
+
+    def thread_attention(self, actor, channel_id, root_id):
+        self._require_actor(actor)
+        chat = self.db.execute("SELECT * FROM conversations WHERE actor=? AND id=?", (actor, channel_id)).fetchone()
+        if not chat:
+            raise LedgerError("Conversation is not known locally")
+        row = self.db.execute("SELECT * FROM thread_follows WHERE actor=? AND channel_id=? AND root_id=?",
+                              (actor, channel_id, root_id)).fetchone()
+        value = dict(row) if row else {"actor": actor, "channel_id": channel_id, "root_id": root_id,
+            "followed": False, "explicit_unfollow": False, "after_seq": 0, "revision": 0, "explicit_revision": 0, "explicit_after_seq": 0}
+        value.update(followed=bool(value["followed"]), explicit_unfollow=bool(value["explicit_unfollow"]),
+                     membership_revision=chat["membership_revision"], attention_revision=chat["attention_revision"])
+        return value
+
+    def follow_thread(self, actor, channel_id, root_id, after_seq, *, expected_revision=None,
+                      expected_membership_revision=None, expected_attention_revision=None):
+        if not isinstance(root_id, str) or not root_id:
+            raise LedgerError("Follow requires a canonical thread root")
+        with self._write():
+            chat = self._conversation_attention(actor, channel_id, member=True)
+            old = self.thread_attention(actor, channel_id, root_id)
+            if ((expected_revision is not None and expected_revision != old["revision"])
+                    or (expected_attention_revision is not None and expected_attention_revision != chat["attention_revision"])
+                    or (expected_membership_revision is not None
+                        and expected_membership_revision != chat["membership_revision"])):
+                raise LedgerError("Thread attention changed while capturing its boundary; retry")
+            boundary = old["after_seq"] if old["followed"] else self._sequence(after_seq)
+            self._put_follow(actor, channel_id, root_id, True, False, boundary, old["revision"] + 1)
+        return self.thread_attention(actor, channel_id, root_id)
+
+    def _put_follow(self, actor, channel_id, root_id, followed, explicit_unfollow, after_seq, revision,
+                    *, explicit_revision=None, explicit_after_seq=None):
+        if explicit_revision is None:
+            previous = self.db.execute("SELECT explicit_revision FROM thread_follows WHERE actor=? AND channel_id=? AND root_id=?",
+                                       (actor, channel_id, root_id)).fetchone()
+            explicit_revision = (previous[0] if previous else 0) + 1
+        if explicit_after_seq is None:
+            explicit_after_seq = after_seq
+        self.db.execute("""INSERT INTO thread_follows
+            (actor,channel_id,root_id,followed,explicit_unfollow,after_seq,revision,updated_at,explicit_revision,explicit_after_seq)
+            VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(actor,channel_id,root_id) DO UPDATE SET followed=excluded.followed,
+            explicit_unfollow=excluded.explicit_unfollow,after_seq=excluded.after_seq,
+            revision=excluded.revision,updated_at=excluded.updated_at,explicit_revision=excluded.explicit_revision,
+            explicit_after_seq=excluded.explicit_after_seq""",
+            (actor, channel_id, root_id, followed, explicit_unfollow, after_seq, revision, self.clock(), explicit_revision, explicit_after_seq))
+
+    def unfollow_thread(self, actor, channel_id, root_id):
+        if not isinstance(root_id, str) or not root_id:
+            raise LedgerError("Unfollow requires a known canonical root; inspect following for offline roots")
+        with self._write():
+            old = self.thread_attention(actor, channel_id, root_id)
+            self._put_follow(actor, channel_id, root_id, False, True, old["after_seq"], old["revision"] + 1)
+            self.db.execute("UPDATE conversations SET attention_revision=attention_revision+1 WHERE actor=? AND id=?",
+                            (actor, channel_id))
+            self.db.execute("""UPDATE auto_follow_intents SET state='cancelled'
+                WHERE actor=? AND channel_id=? AND root_id=? AND state='pending'""", (actor, channel_id, root_id))
+        return self.thread_attention(actor, channel_id, root_id)
+
+    def remember_thread_alias(self, actor, post_id, channel_id, root_id):
+        """Retain a canonical explicit-operation reference, never a read/history trail."""
+        if any(not isinstance(value, str) or not value for value in (post_id, channel_id, root_id)):
+            raise LedgerError("Thread alias requires canonical post, conversation and root IDs")
+        with self._write():
+            self.thread_attention(actor, channel_id, root_id)
+            self._remember_thread_alias(actor, post_id, channel_id, root_id)
+
+    def _remember_thread_alias(self, actor, post_id, channel_id, root_id):
+        old = self.db.execute("SELECT channel_id,root_id FROM thread_aliases WHERE actor=? AND post_id=?",
+                              (actor, post_id)).fetchone()
+        if old and tuple(old) != (channel_id, root_id):
+            raise LedgerError("Canonical thread alias changed")
+        self.db.execute("INSERT OR IGNORE INTO thread_aliases VALUES(?,?,?,?)", (actor, post_id, channel_id, root_id))
+
+    def resolve_thread_alias(self, actor, post_id):
+        self._require_actor(actor)
+        row = self.db.execute("SELECT channel_id,root_id FROM thread_aliases WHERE actor=? AND post_id=?",
+                              (actor, post_id)).fetchone()
+        if row:
+            return dict(row)
+        row = self.db.execute("""SELECT p.channel_id,CASE WHEN p.root_id='' THEN p.id ELSE p.root_id END AS root_id
+            FROM posts p JOIN conversations c ON c.id=p.channel_id AND c.actor=? WHERE p.id=?""", (actor, post_id)).fetchone()
+        if row:
+            return dict(row)
+        row = self.db.execute("SELECT channel_id,root_id FROM thread_follows WHERE actor=? AND root_id=?",
+                              (actor, post_id)).fetchone()
+        return dict(row) if row else None
+
+    def following(self, actor, channel_id=None):
+        self._require_actor(actor)
+        query = """SELECT f.*,c.name FROM thread_follows f JOIN conversations c
+            ON c.actor=f.actor AND c.id=f.channel_id WHERE f.actor=? AND f.followed=1
+            AND c.available=1 AND c.role='member'"""
+        args = [actor]
+        if channel_id is not None:
+            query += " AND f.channel_id=?"
+            args.append(channel_id)
+        return [dict(row) for row in self.db.execute(query + " ORDER BY f.channel_id,f.root_id", args)]
+
+    @staticmethod
+    def _attention_predicate():
+        # Callers use the r/p/c aliases. Unknown legacy sequences preserve only the old All policy.
+        return """r.notification_eligible=1 AND c.available=1 AND c.role='member'
+            AND EXISTS (SELECT 1 FROM actors recipient WHERE recipient.actor=r.actor
+                AND recipient.mode='native' AND recipient.user_id IS NOT NULL)
+            AND c.notification_mode<>'off' AND c.leave_op_id IS NULL
+            AND (r.first_seen_seq>c.attention_after_seq OR (r.first_seen_seq IS NULL AND c.attention_after_seq=0))
+            AND (c.notification_mode='all' OR (c.notification_mode='threads' AND EXISTS (
+                SELECT 1 FROM thread_follows f WHERE f.actor=r.actor AND f.channel_id=p.channel_id
+                AND f.root_id=CASE WHEN p.root_id='' THEN p.id ELSE p.root_id END
+                AND f.followed=1 AND r.first_seen_seq>f.after_seq)))"""
 
     def _suppress_unannounced(self, actor):
-        """Attention/access revocation can suppress an arrival, never revive it."""
+        """Revocation suppresses old attention without consuming mail or changing native proofs."""
         self.db.execute("""UPDATE receipts SET notification_eligible=0
             WHERE actor=? AND announced_at IS NULL AND post_id IN (
                 SELECT p.id FROM posts p JOIN conversations c ON c.id=p.channel_id
-                WHERE c.actor=? AND (c.muted=1 OR c.available=0 OR c.role<>'member'))""", (actor, actor))
+                WHERE c.actor=? AND (c.notification_mode='off' OR c.available=0 OR c.role<>'member'))""", (actor, actor))
 
     def cursor(self, actor):
         row = self._require_actor(actor)
@@ -585,7 +869,7 @@ class Ledger:
 
     def _ingest(self, actor, current, posts, cursor, generation):
         notifying_channels = {row[0] for row in self.db.execute(
-            "SELECT id FROM conversations WHERE actor=? AND available=1 AND muted=0 AND role='member'", (actor,))}
+            "SELECT id FROM conversations WHERE actor=? AND available=1 AND notification_mode<>'off' AND role='member' AND leave_op_id IS NULL", (actor,))}
         for post, attention, sequence in posts:
             if post.get("system") or post.get("type", "").startswith("system_"):
                 continue
@@ -603,8 +887,8 @@ class Ledger:
             if post["user_id"] != current["user_id"]:
                 eligible = (attention and post["channel_id"] in notifying_channels
                             and current["enrollment_seq"] is not None and sequence > current["enrollment_seq"])
-                self.db.execute("INSERT OR IGNORE INTO receipts(actor,post_id,notification_eligible) VALUES(?,?,?)",
-                                (actor, post["id"], eligible))
+                self.db.execute("INSERT OR IGNORE INTO receipts(actor,post_id,notification_eligible,first_seen_seq) VALUES(?,?,?,?)",
+                                (actor, post["id"], eligible, sequence))
         self.db.execute("UPDATE actors SET cursor=?,generation=? WHERE actor=?", (cursor, generation, actor))
 
     def apply_feed(self, actor, page):
@@ -667,7 +951,7 @@ class Ledger:
     def _unread(self, actor, *, channel_id=None, root_id=None, post_id=None, eligible=False,
                 attention=False, unoffered=False, order="chronological", limit=None):
         account = self._require_actor(actor)
-        query = """SELECT p.*,r.arrival,r.read_at,r.announced_at,r.notification_eligible,c.name,c.kind,c.role,c.muted
+        query = """SELECT p.*,r.arrival,r.read_at,r.announced_at,r.notification_eligible,r.first_seen_seq,c.name,c.kind,c.role,c.muted,c.notification_mode
             FROM receipts r JOIN posts p ON p.id=r.post_id
             JOIN conversations c ON c.actor=r.actor AND c.id=p.channel_id
             WHERE r.actor=? AND r.read_at IS NULL AND r.unavailable_at IS NULL AND c.available=1"""
@@ -685,7 +969,7 @@ class Ledger:
             query += " AND p.id=?"
             args.append(post_id)
         if eligible or attention:
-            query += " AND r.notification_eligible=1 AND c.muted=0 AND c.role='member'"
+            query += " AND " + self._attention_predicate()
         if eligible:
             query += " AND r.announced_at IS NULL"
         if unoffered:
@@ -760,8 +1044,8 @@ class Ledger:
             JOIN posts p ON p.id=r.post_id
             JOIN conversations c ON c.actor=r.actor AND c.id=p.channel_id
             WHERE a.actor=? AND a.status='pending' AND a.agent_seen_at IS NULL
-                AND a.transport<>'rejected' AND r.notification_eligible=1 AND r.unavailable_at IS NULL
-                AND c.available=1 AND c.role='member' AND c.muted=0 LIMIT 1""", (actor,)).fetchone() is not None
+                AND a.transport<>'rejected' AND r.unavailable_at IS NULL AND """ + self._attention_predicate() +
+                " LIMIT 1", (actor,)).fetchone() is not None
 
     def unread_posts(self, actor, channel_id=None, root_id=None, limit=20):
         """Select exact unread IDs; caller fetches canonical bodies before mark_read."""
@@ -788,9 +1072,12 @@ class Ledger:
         """Unread conversation metadata, including muted mail; no state changes or body copies."""
         result = {}
         for post in self._unread(actor):
-            chat = result.setdefault(post["channel_id"], {
-                "id": post["channel_id"], "name": post["name"], "kind": post["kind"],
-                "role": post["role"], "muted": bool(post["muted"]), "unread_count": 0})
+            chat = result.get(post["channel_id"])
+            if chat is None:
+                chat = result[post["channel_id"]] = {
+                    "id": post["channel_id"], "name": post["name"], "kind": post["kind"],
+                    "role": post["role"], "muted": bool(post["muted"]), "notification_mode": post["notification_mode"],
+                    "followed_thread_count": len(self.following(actor, post["channel_id"])), "unread_count": 0}
             chat["unread_count"] += 1
             chat["latest_post_id"] = post["id"]
             chat["author"] = post["author"]
@@ -798,7 +1085,11 @@ class Ledger:
         return sorted(result.values(), key=lambda c: (-c["create_at"], c["id"]))
 
     def preview_candidates(self, actor, channel):
-        """Quiet discovery, including announced work; no receipt mutation."""
+        """Quiet inbox presentation: prefer attention, then preview reference mail.
+
+        The fallback never enters native candidates, admission or reminders.
+        Neither selection consumes a receipt or changes its attention policy.
+        """
         attention = self._unread(actor, channel_id=channel, attention=True, order="arrival", limit=20)
         return attention or self._unread(actor, channel_id=channel, order="latest", limit=1)
 
@@ -984,6 +1275,10 @@ class Ledger:
                 return False
             if attempt["status"] != "pending" or attempt["transport"] != "pending":
                 raise LedgerError("Claude peer attempt cannot emit after transport or retirement")
+            if not any(post["id"] in attempt["post_ids"] for post in self._unread(actor, eligible=True)):
+                self.db.execute("""UPDATE attempts SET status='retired',transport='rejected',
+                    reason='Attention changed before native handoff' WHERE token=?""", (token,))
+                return False
             self.db.execute("UPDATE attempts SET emitted_at=?,emission_json=? WHERE token=?",
                             (self.clock(), encoded, token))
         return True
@@ -1093,6 +1388,10 @@ class Ledger:
         with self._write():
             attempt = self._context_binding(token, actor, epoch, turn_key, tool_id)
             if attempt["status"] != "pending" or attempt["emitted_at"] is not None:
+                return False
+            if not any(post["id"] in attempt["post_ids"] for post in self._unread(actor, eligible=True)):
+                self.db.execute("""UPDATE attempts SET status='retired',transport='rejected',
+                    reason='Attention changed before native handoff' WHERE token=?""", (token,))
                 return False
             self.db.execute("UPDATE attempts SET emitted_at=?,emission_json=? WHERE token=?",
                             (self.clock(), emission, token))
@@ -1409,10 +1708,13 @@ class Ledger:
     def interrupt(self, actor, turn_key, epoch=None):
         return self._end_turn(actor, turn_key, "interrupted", epoch)
 
-    def prepare_outbound(self, actor, payload, op_id=None):
+    def prepare_outbound(self, actor, payload, op_id=None, *, auto_follow_after_seq=None):
         """Persist immutable intent before HTTP; attach unresolved automatic provenance."""
         with self._write():
+            existed = op_id is not None and self.find_outbound(op_id) is not None
             operation_id = self._prepare_outbound(actor, payload, op_id)
+            if auto_follow_after_seq is not None and not existed:
+                self._prepare_auto_follow(operation_id, auto_follow_after_seq)
         return self.outbound(operation_id)
 
     def _prepare_outbound(self, actor, payload, op_id=None):
@@ -1432,17 +1734,94 @@ class Ledger:
         now = self.clock()
         self.db.execute("""INSERT OR IGNORE INTO outbound(op_id,actor,payload_json,created_at,updated_at)
             VALUES(?,?,?,?,?)""", (operation_id, actor, encoded, now, now))
+        if not old and value.get("action") == "leave":
+            channel_id = value["channel_id"]
+            self._conversation_attention(actor, channel_id)
+            self._revoke_channel_attention(actor, channel_id)
+            self.db.execute("UPDATE conversations SET leave_op_id=? WHERE actor=? AND id=?",
+                            (operation_id, actor, channel_id))
         return operation_id
 
-    def prepare_attachment_outbound(self, actor, payload, sources):
+    def prepare_attachment_outbound(self, actor, payload, sources, *, auto_follow_after_seq=None):
         """Freeze the original post and all upload IDs atomically before effects."""
         with self._write():
             uploads = [secrets.token_urlsafe(24) for _ in sources]
             parent = self._prepare_outbound(actor, dict(payload, action="attachment_post", uploads=uploads))
+            if auto_follow_after_seq is not None:
+                self._prepare_auto_follow(parent, auto_follow_after_seq)
             for operation_id, source in zip(uploads, sources):
                 self._prepare_outbound(actor, {"action": "upload", "parent_id": parent,
                     "channel_id": payload["channel_id"], "source": source}, operation_id)
         return self.outbound(parent)
+
+    def _prepare_auto_follow(self, op_id, after_seq):
+        """Sidecar intent shares the post journal transaction; never enters HTTP payloads."""
+        self._sequence(after_seq)
+        operation = self.outbound(op_id)
+        payload, actor = operation["payload"], operation["actor"]
+        if payload.get("action") not in ("post", "attachment_post"):
+            raise LedgerError("Auto-follow requires an outbound post")
+        channel_id, root = payload["channel_id"], payload.get("root_id") or ""
+        chat = self._conversation_attention(actor, channel_id, member=True)
+        if self.db.execute("SELECT 1 FROM auto_follow_intents WHERE op_id=?", (op_id,)).fetchone():
+            return
+        # Reopening a pre-feature journal must not retroactively invent a follow.
+        if operation["state"] != "pending":
+            return
+        follow = self.thread_attention(actor, channel_id, root)
+        self.db.execute("""INSERT INTO auto_follow_intents
+            (op_id,actor,channel_id,root_id,after_seq,membership_revision,follow_revision,state,explicit_revision)
+            VALUES(?,?,?,?,?,?,?,?,?)""", (op_id, actor, channel_id, root, max(after_seq, follow["explicit_after_seq"]), chat["membership_revision"],
+                follow["revision"], "cancelled" if follow["explicit_unfollow"] else "pending", follow["explicit_revision"]))
+
+    def pending_auto_follows(self, actor):
+        self._require_actor(actor)
+        return [dict(row) for row in self.db.execute("""SELECT i.* FROM auto_follow_intents i
+            JOIN outbound o ON o.op_id=i.op_id WHERE i.actor=? AND i.state='pending' AND o.state<>'failed'
+            ORDER BY o.created_at,i.op_id""", (actor,))]
+
+    def complete_auto_follow(self, op_id, canonical_post):
+        """Canonical proof may add attention, never undo a newer explicit user choice."""
+        with self._write():
+            intent = self.db.execute("SELECT * FROM auto_follow_intents WHERE op_id=? AND state='pending'", (op_id,)).fetchone()
+            if not intent:
+                return False
+            operation = self.outbound(op_id)
+            if operation["state"] != "complete":
+                raise LedgerError("Auto-follow requires a canonically completed outbound post")
+            result = operation["result"] or {}
+            actor, channel_id = intent["actor"], intent["channel_id"]
+            account = self._require_actor(actor)
+            post = canonical_post
+            if (not isinstance(post, dict) or not result.get("post_id") or post.get("id") != result["post_id"]
+                    or post.get("channel_id") != channel_id or result.get("channel_id") != channel_id
+                    or post.get("user_id") != account["user_id"] or post.get("root_id", "") != intent["root_id"]
+                    or post.get("system") or post.get("type", "").startswith("system_")):
+                raise LedgerError("Auto-follow proof does not match the outbound canonical post")
+            chat = self.db.execute("SELECT * FROM conversations WHERE actor=? AND id=?", (actor, channel_id)).fetchone()
+            root = intent["root_id"] or post["id"]
+            self._remember_thread_alias(actor, post["id"], channel_id, root)
+            previous = self.db.execute("SELECT * FROM thread_follows WHERE actor=? AND channel_id=? AND root_id=?",
+                                       (actor, channel_id, root)).fetchone()
+            allowed = (chat and chat["available"] and chat["role"] == "member"
+                and chat["leave_op_id"] is None and chat["membership_revision"] == intent["membership_revision"]
+                and (previous["explicit_revision"] if previous else 0) == intent["explicit_revision"]
+                and not (previous and previous["explicit_unfollow"]))
+            if allowed:
+                boundary = min(previous["after_seq"], intent["after_seq"]) if previous and previous["followed"] else intent["after_seq"]
+                if not previous or not previous["followed"] or boundary != previous["after_seq"]:
+                    self._put_follow(actor, channel_id, root, True, False, boundary,
+                        (previous["revision"] if previous else 0) + 1, explicit_revision=intent["explicit_revision"],
+                        explicit_after_seq=previous["explicit_after_seq"] if previous else 0)
+            self.db.execute("UPDATE auto_follow_intents SET state=? WHERE op_id=?",
+                            ("complete" if allowed else "cancelled", op_id))
+        return bool(allowed)
+
+    def _discard_auto_follow(self, op_id):
+        # A rejection releases only this exact leave's attention block. Cancelling
+        # follows is deliberate local state and must not be reversed by a late receipt.
+        self.db.execute("UPDATE conversations SET leave_op_id=NULL WHERE leave_op_id=?", (op_id,))
+        self.db.execute("UPDATE auto_follow_intents SET state='cancelled' WHERE op_id=? AND state='pending'", (op_id,))
 
     def claim_outbound(self, op_id, *, result=None, admit=None):
         """One possible request, frozen before entry; an uncertain claim is never replayed."""
@@ -1466,6 +1845,8 @@ class Ledger:
                 return False
             self.db.execute("UPDATE outbound SET state=?,result_json=?,error=?,updated_at=? WHERE op_id=?",
                             (state, _json(result), error, self.clock(), op_id))
+            if state == "failed":
+                self._discard_auto_follow(op_id)
         return True
 
     def fail_attachment_outbound(self, op_id, error):
@@ -1474,6 +1855,7 @@ class Ledger:
             operation = self.outbound(op_id)
             if operation["state"] != "pending":
                 return
+            self._discard_auto_follow(op_id)
             for target in [op_id, *operation["payload"]["uploads"]]:
                 self.db.execute("UPDATE outbound SET state='failed',error=?,updated_at=? WHERE op_id=? AND state='pending'",
                                 (error, self.clock(), target))
@@ -1544,3 +1926,5 @@ class Ledger:
                 raise LedgerError("Uncertain operation must be reconciled before retry")
             self.db.execute("UPDATE outbound SET state=?,result_json=?,error=?,updated_at=? WHERE op_id=?",
                             (state, _json(result), error, self.clock(), op_id))
+            if state == "failed":
+                self._discard_auto_follow(op_id)
