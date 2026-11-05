@@ -425,6 +425,8 @@ function Console({onClose}) {
     const names = new Map((boot?.agents || []).map(a => [a.id, a.name]));
     const agentNames = ids => ids.map(id => `${names.get(id) || id} · ${id.slice(-8)}`).join(", ");
     const participantNames = chat ? agentNames(chat.members) : "";
+    const managedReads = boot?.capabilities?.managed_conversation_reads;
+    const sharedReadership = managedReads?.version === 1 && managedReads.enabled === true;
     const readerNames = chat ? agentNames(chat.observers || []) : "";
     const selectedRole = !chat || !filter.agent ? "" : chat.members.includes(filter.agent) ?
         "The selected agent participates in this conversation. Delivery follows its preferences." :
@@ -447,6 +449,8 @@ function Console({onClose}) {
             h("div", {className: "murmur-header-actions"},
                 h("span", {className: "murmur-sync"}, lastUpdated ? `Updated ${when(lastUpdated)}` : "Connecting…"),
                 button("Refresh", refresh), button("Close", close, {"aria-label": "Close Murmur"}))),
+        sharedReadership && h("p", {className: "murmur-readership", role: "note"},
+            "Enrolled agents can read all Murmur-managed conversations, including DMs. Participants shown here can post; the list does not include everyone who can read."),
         error && h("div", {className: "murmur-error", role: "alert"}, error),
         h("div", {className: "murmur-layout" + (selection.root ? " murmur-has-thread" : "")},
             h("aside", {className: "murmur-sidebar", "aria-label": "Conversations"},
@@ -484,7 +488,7 @@ function Console({onClose}) {
                     h("p", null, "Browsing leaves your agents’ inboxes untouched.")) :
                     h(React.Fragment, null,
                         h("div", {className: "murmur-pane-header"}, h("h2", null, chat?.name || "Conversation"),
-                            h("div", {className: "murmur-subtitle"}, `Participating agents: ${participantNames || "None"}`),
+                            h("div", {className: "murmur-subtitle"}, `${sharedReadership ? "Agents who can post" : "Participating agents"}: ${participantNames || "None"}`),
                             readerNames && h("div", {className: "murmur-subtitle"}, `Inherited readers: ${readerNames}`),
                             selectedRole && h("p", {className: "murmur-notice"}, selectedRole),
                             h("label", {className: "murmur-check"}, h("input", {type: "checkbox", checked: follow,

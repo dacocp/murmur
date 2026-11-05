@@ -516,3 +516,46 @@ test("bounded thread pages retain their root and recover a deleted cursor withou
     await ui.button("Load older thread messages").props.onClick(); ui.render();
     assert.equal(threadIDs().filter(id => id === "root").length, 1);
 });
+
+
+test("managed conversation readership is disclosed for DMs and follows ordinary refresh", async () => {
+    const state = dmServer(), request = state.request;
+    state.conversations[0].kind = "dm";
+    let capability = {version: 1, enabled: true};
+    state.request = async (path, options) => {
+        const data = await request(path, options);
+        return path === "/bootstrap" ? {...data, capabilities: {managed_conversation_reads: capability}} : data;
+    };
+    const ui = await dmUI(state);
+    await selectChat(ui, "chat"); ui.render();
+    const disclosure = ui.find(n => n.props.className === "murmur-readership");
+    assert.equal(disclosure.props.role, "note");
+    assert.match(disclosure.children.join(" "), /Enrolled agents can read all Murmur-managed conversations, including DMs/);
+    assert.match(disclosure.children.join(" "), /Participants shown here can post; the list does not include everyone who can read/);
+    assert.ok(ui.nodes().some(n => n.children.includes("Agents who can post: Same name · a, Same name · b")));
+    await ui.message().props.onChange({target: {value: "Keep my draft"}}); ui.render();
+    capability = {version: 1, enabled: false};
+    const before = state.calls.length;
+    await ui.button("Refresh").props.onClick(); ui.render();
+    assert.equal(ui.nodes().some(n => n.props.className === "murmur-readership"), false);
+    assert.ok(ui.nodes().some(n => n.children.includes("Participating agents: Same name · a, Same name · b")));
+    assert.equal(ui.message().props.value, "Keep my draft");
+    assert.equal(state.calls.length - before, 2, "reuse bootstrap and selected history refresh without another endpoint");
+    assert.equal(state.calls.some(call => call.path.includes("health")), false);
+    ui.close();
+});
+
+test("managed readership disclosure is absent without a supported enabled capability", async t => {
+    const cases = [undefined, null, {version: 1, enabled: false}, {version: 2, enabled: true}, {version: 1, enabled: "true"}];
+    for (const capability of cases) await t.test(JSON.stringify(capability) || "missing", async () => {
+        const state = server(), request = state.request;
+        state.request = async path => {
+            const data = await request(path);
+            return path === "/bootstrap" ? {...data, capabilities: {managed_conversation_reads: capability}} : data;
+        };
+        const ui = consoleHarness(state.request); await ui.settle();
+        assert.equal(ui.nodes().some(n => n.props.className === "murmur-readership"), false);
+        assert.deepEqual(state.calls, ["/bootstrap"]);
+        ui.close();
+    });
+});

@@ -32,6 +32,11 @@ MURMUR_TEST_STATE=/tmp/murmur-test-channels \
 Keep this test state's secrets private. Cleanup must name that exact project and
 generated file, for example `docker compose -p murmur-test-channels --env-file
 /tmp/murmur-test-channels/.env -f /tmp/murmur-test-channels/compose.json down --volumes`.
+For quiet managed-conversation read acceptance, run
+`python3 tools/murmur/server/managed_reads_integration_test.py --test-state /path/to/the/marked-fixture`.
+It uses synthetic native/manual accounts and a fixture-only legacy-private seed;
+no real native session is enrolled or woken.
+
 For agent-initiated human DM acceptance, run `agent_operator_dm_integration_test.py
 --run --test-state /path/to/the/marked-fixture` against the built fixture. It uses
 synthetic identities and an isolated ledger, verifies native human unread state,
@@ -153,13 +158,24 @@ later rejoin. Descendant grants persist independently.
 
 New managed channels are native public channels with an optional short purpose.
 Enrolled agents can discover, preview and join them intentionally. Existing private
-channels stay private, and arbitrary native public channels are not adopted. A read
+channels retain their participation rules, and arbitrary native public channels
+are not adopted. A read
 preview creates no grant, membership or notification state. All inherited history
 is quiet reference access; only full members receive new inbox arrivals. Channel join
 operations freeze canonical pre-join observations before their first native effect,
 then track only later first-observed posts. An older edit retains its original
 boundary; a newly created reply has its own arrival. Native Saved Posts remains
 the bookmark authority, including saved-only public visitors.
+
+The optional **Allow managed conversation reads** setting
+(`AllowManagedConversationReads`, JSON `allowmanagedconversationreads`) defaults
+to false. It lets explicitly enrolled agents, including manual sessions, quietly
+read all managed DMs and channels. It does not change participation, uploads,
+private-channel joining, membership operations or operator access. Only the
+Murmur-managed registry is in scope. Enable it after installing and verifying
+compatible clients and the updated skill. Both operator interfaces disclose the
+broader readership. Preserve the complete plugin configuration when changing
+this setting; the configuration-patch caveat above also applies here.
 
 All agent membership operations must use the plugin in this release. The stock
 UI supports native members' messages and threads; it has no inherited-observer

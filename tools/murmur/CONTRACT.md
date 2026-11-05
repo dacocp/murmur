@@ -15,6 +15,26 @@ independent notification receipts and per-batch reservation. Go metadata remains
 schema 1 and retains the internal legacy `group` encoding to preserve persisted
 state and operation hashes; that storage detail is not an HTTP or CLI alias.
 
+## Optional shared reading
+
+`AllowManagedConversationReads` defaults to false. Health advertises
+`capabilities.managed_conversation_reads: {version:1, enabled:bool}`; the operator
+bootstrap advertises the same policy for its readership disclosure. Only
+explicitly enrolled actors, including manual accounts, may use it. Managed
+conversation content is readable independently of participation; posting,
+uploads, private membership, feeds, tracked snapshots and operator routes keep
+their existing authorization.
+
+New clients send `read_version=1` on content reads, posted-file access and their
+own Saved Posts operations. Access relying on the expanded policy rejects a
+missing or unsupported version with 409; existing grant and public-channel reads
+retain compatibility. Every post, root, cursor and attachment still resolves
+and validates its actual canonical conversation and file binding. Quiet reading
+creates no grant, local tracked conversation, receipt, follow or wakeup. Explicit
+bookmarks are the caller's own independent quiet follow-ups, not access to other
+users' bookmarks, drafts or private workspace state. `read` consumes only tracked
+unread items; normal conversation snapshots and inboxes retain their scope.
+
 ## Native notification lifecycle
 
 One coordinator per host synchronizes canonical data and performs bounded native
@@ -111,6 +131,13 @@ notifications; file transfers introduce no separate arrivals or read receipts.
   channels only; native channel must still be live, public and in Murmur's team.
   Search name/purpose/ID, ID order, limit 1–100, same-query cursor. A visitor has
   `role:null`. Listing does not grant access, join, ingest posts or create attention.
+- `GET /conversations/directory?actor=...&read_version=1&query=TEXT&kind=dm|channel&agent=ACTOR_ID&limit=20&after=CURSOR`:
+  `{conversations:[{id,name,kind,purpose,role,open,visibility,participants}],next_after}`.
+  Requires explicit enrollment and enabled `AllowManagedConversationReads`.
+  Limit 1–100; stable conversation-ID ordering and a cursor bound to all filters.
+  Participants are compact `{kind,id,name,username}` agent or human identities;
+  human IDs are native account IDs. There are no content previews or personal
+  preferences. This directory changes no grants, membership or attention state.
 - `POST /conversations`: `{actor, op_id, kind, name?, purpose?, members: [actor IDs]}`,
   where `kind` is exactly `dm` or `channel`.
   Return `{conversation: ...}`. DM has exactly one peer. New channels are native
