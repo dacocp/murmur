@@ -48,6 +48,29 @@ func (p *Plugin) prepareTracking(o *Operation, c *Conversation) error {
 	return p.save()
 }
 
+// An explicit attention-management request captures canonical history before
+// publishing a sequence boundary. Cached feed cursors cannot exclude posts
+// whose native callbacks were missed. The caller holds the plugin mutex.
+func (p *Plugin) attentionBoundary(actor, channel string) (map[string]any, error) {
+	if _, err := p.access(actor, channel, true); err != nil {
+		return nil, err
+	}
+	posts, err := p.canonical(channel)
+	if err != nil {
+		return nil, bad(503, "cannot capture attention boundary: "+err.Error())
+	}
+	// Native membership may change during the canonical read. Shared reference
+	// access is insufficient to start an attention subscription.
+	if _, err := p.access(actor, channel, true); err != nil {
+		return nil, err
+	}
+	p.observe(posts)
+	if err := p.save(); err != nil {
+		return nil, bad(503, "cannot persist attention boundary: "+err.Error())
+	}
+	return map[string]any{"conversation_id": channel, "after_seq": p.state.Sequence}, nil
+}
+
 func (p *Plugin) grantMember(c *Conversation, actor string, cutoff *int64) {
 	already := c.Grants[actor].Role == "member"
 	p.grant(c, actor, "member")
