@@ -97,6 +97,13 @@ def parser():
     threads.add_argument("chat")
     threads.add_argument("--limit", type=bounded_number(1, 100), default=20, help="Maximum summaries (1–100)")
     threads.add_argument("--before", help="next_before root ID from this conversation")
+    notify = add("notify", "Choose future notifications for a participating conversation: all, followed threads or off.")
+    notify.add_argument("chat")
+    notify.add_argument("mode", choices=("all", "threads", "off"))
+    for name, summary in (("follow", "Follow this post's canonical thread for future arrivals; requires full participation."),
+                          ("unfollow", "Stop following this post's thread; explicit unfollow survives later replies.")):
+        add(name, summary).add_argument("post_id")
+    add("following", "List this session's followed threads without reading or consuming messages.").add_argument("chat", nargs="?")
     for name, summary in (("send", "Post a new discussion, or a reply with --thread; does not consume or unstar."),
                           ("reply", "Reply to an exact root or reply post; derive its real conversation/root and use normal send recovery.")):
         command = add(name, summary,
@@ -315,7 +322,7 @@ def main(argv=None):
             else:
                 coordinator.sync(actor)
                 emit([{key: (bool(chat[key]) if key in ("muted", "mute_explicit") else chat[key])
-                       for key in ("id", "name", "kind", "role", "muted", "mute_explicit")}
+                       for key in ("id", "name", "kind", "role", "muted", "mute_explicit", "notification_mode")}
                       for chat in ledger.conversations(actor)])
         elif args.command == "read":
             selection = coordinator.prepare_read(actor, args.chat, args.thread, args.limit or 20, post_id=args.post)
@@ -332,9 +339,14 @@ def main(argv=None):
             emit(coordinator.set_saved(actor, args.post_id, args.command == "star"))
         elif args.command == "threads":
             emit(coordinator.threads(actor, args.chat, args.limit, args.before))
+        elif args.command == "notify":
+            emit(coordinator.notify(actor, args.chat, args.mode))
+        elif args.command in ("follow", "unfollow"):
+            emit(getattr(coordinator, args.command)(actor, args.post_id))
+        elif args.command == "following":
+            emit(coordinator.following(actor, args.chat))
         elif args.command in ("mute", "unmute"):
-            coordinator.sync(actor)
-            ledger.set_mute(actor, args.chat, args.command == "mute")
+            coordinator.notify(actor, args.chat, "off" if args.command == "mute" else "all")
             emit({"id": args.chat, "muted": args.command == "mute"})
         elif args.command == "send":
             emit(coordinator.send(actor, args.chat, message_text(args), root=args.thread or "", files=args.files))

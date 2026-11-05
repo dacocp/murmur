@@ -179,6 +179,8 @@ class Coordinator:
         from .onboarding import Onboarding
         Onboarding(self, actor, self.ledger.onboarding(actor)["plan_id"]).run()
         plan = self.ledger.onboarding(actor)
+        if plan["status"] == "complete" and (plan["snapshot"] or {}).get("attention_version") == 1:
+            self.sync(actor)
         summary = {k: plan[k] for k in ("choice", "source_actor", "status")}
         if plan["snapshot"]:
             summary.update({key: plan["snapshot"][key] for key in
@@ -227,6 +229,14 @@ class Coordinator:
             parent = _server_parent(value, record["mode"])
             agent = self._register_backend(record, parent)
             self._accept_registration(record, agent)
+        plan = self.ledger.onboarding(actor)
+        if plan and plan["status"] != "complete" and plan["choice"] == "pending-and-channels":
+            snapshot = self.ledger.capture_pending(actor, plan["plan_id"])
+            if snapshot.get("attention_version") == 1:
+                # Import subscription policy before the first feed ingestion.
+                # A resumed/uncertain join must not ingest under default All.
+                self.ledger.sync_conversations(actor, self.backend.conversations(actor))
+                return
         # Each bounded request commits access, attention and cursor together.
         # Yield to the daemon between ticks if a busy server has a large backlog.
         stale, last_stale = 0, None
@@ -283,6 +293,8 @@ class Coordinator:
                 summary = summaries.setdefault(chat["id"], {
                     "id": chat["id"], "name": chat["name"], "kind": chat["kind"],
                     "role": chat["role"], "muted": bool(chat["muted"]),
+                    "notification_mode": chat.get("notification_mode"),
+                    "followed_thread_count": len(self.ledger.following(actor, chat["id"])),
                     "unread_count": 0, "starred_count": 0, "starred": []})
                 summary["starred"].append({
                     "post_id": post["id"], "root_id": post["root_id"],
@@ -447,7 +459,8 @@ class Coordinator:
                 raise ValueError("Attachment reply must use a genuine root in its destination conversation")
         sources = [describe_source(path, limits["max_file_size"]) for path in files]
         operation = self.ledger.prepare_attachment_outbound(actor,
-            {"channel_id": channel, "message": message, "root_id": root}, sources)
+            {"channel_id": channel, "message": message, "root_id": root}, sources,
+            auto_follow_after_seq=self._send_attention_boundary(actor, channel))
         return self._execute_attachment(operation)
 
     def download(self, actor, post_id, file_id, output):
@@ -463,6 +476,8 @@ class Coordinator:
         if descriptor["role"] is None:
             for summary in page["threads"]:
                 summary["unread_count"] = None
+                summary["following"] = False
+            page["notification_mode"] = None
             return page
         self.sync(actor)
         chat = next((c for c in self.ledger.conversations(actor) if c["id"] == channel), None)
@@ -472,9 +487,127 @@ class Coordinator:
         for post in self.ledger._unread(actor, channel_id=channel):
             root = post["root_id"] or post["id"]
             counts[root] = counts.get(root, 0) + 1
+        followed = {f["root_id"] for f in self.ledger.following(actor, channel)}
         for summary in page["threads"]:
             summary["unread_count"] = counts.get(summary["id"], 0)
+            summary["following"] = summary["id"] in followed
+        page["notification_mode"] = self.ledger.notification_mode(actor, channel)["mode"]
         return page
+
+    def attention_boundary(self, actor, channel):
+        """Require the versioned canonical boundary before enabling future attention."""
+        self.ledger.actor(actor)
+        health = self.backend.request("GET", "/health")
+        capabilities = health.get("capabilities") if isinstance(health, dict) else None
+        capability = capabilities.get("attention_boundaries") if isinstance(capabilities, dict) else None
+        if (not isinstance(capability, dict) or type(capability.get("version")) is not int
+                or capability["version"] != 1):
+            raise BackendError("This server requires attention-boundary version 1; upgrade the server before enabling notifications")
+        value = self.backend.attention_boundary(actor, channel)
+        if (not isinstance(value, dict) or value.get("conversation_id") != channel
+                or type(value.get("after_seq")) is not int or value["after_seq"] < 0):
+            raise BackendError("Server returned an invalid canonical attention boundary")
+        return value["after_seq"]
+
+    def _full_member(self, actor, channel):
+        self.ledger.actor(actor)
+        chat = next((c for c in self.ledger.conversations(actor) if c["id"] == channel), None)
+        if chat is None or chat["role"] != "member" or chat.get("leave_op_id"):
+            raise LedgerError("Thread notifications require full participation; join the conversation, check chats and retry")
+        return chat
+
+    def _send_attention_boundary(self, actor, channel):
+        chat = next((c for c in self.ledger.conversations(actor) if c["id"] == channel), None)
+        if chat is None or chat["role"] != "member":
+            # A newly created/joined conversation may not have reached this
+            # host's next background snapshot yet. Learn membership before
+            # journaling the post, never manufacture it from a read descriptor.
+            self.sync(actor)
+        self._full_member(actor, channel)
+        return self.attention_boundary(actor, channel)
+
+    def notify(self, actor, channel, mode):
+        self.ledger.actor(actor)
+        if mode not in ("all", "threads", "off"):
+            raise ValueError("Notification mode must be all, threads or off")
+        if mode == "off":
+            return {"id": channel, **self.ledger.set_notification_mode(actor, channel, mode)}
+        chat = next((c for c in self.ledger.conversations(actor) if c["id"] == channel), None)
+        if chat is not None and chat["role"] == "observer":
+            # A dormant preference is preserved for a later explicit join;
+            # observer access never activates notifications or a follow.
+            return {"id": channel, **self.ledger.set_notification_mode(actor, channel, mode)}
+        self._full_member(actor, channel)
+        previous = self.ledger.notification_mode(actor, channel)
+        if previous["mode"] == mode:
+            return {"id": channel, **self.ledger.set_notification_mode(actor, channel, mode,
+                expected_revision=previous["revision"], expected_membership_revision=previous["membership_revision"])}
+        boundary = self.attention_boundary(actor, channel)
+        value = self.ledger.set_notification_mode(actor, channel, mode, after_seq=boundary,
+            expected_revision=previous["revision"], expected_membership_revision=previous["membership_revision"])
+        return {"id": channel, **value}
+
+    def _canonical_thread(self, actor, post_id):
+        post = self.show(actor, post_id)
+        root_id = post.get("root_id") or post["id"]
+        root = self.backend.root(actor, root_id)
+        if (root.get("id") != root_id or root.get("channel_id") != post["channel_id"]
+                or root.get("root_id") or root.get("system") or root.get("type", "").startswith("system_")):
+            raise RuntimeError("Server returned a different canonical thread root")
+        return {"channel_id": post["channel_id"], "root_id": root_id}
+
+    def follow(self, actor, post_id):
+        self.ledger.actor(actor)
+        # Resolve known aliases before any network work. Repeating a follow
+        # preserves its original cutoff and works while offline.
+        alias = self.ledger.resolve_thread_alias(actor, post_id)
+        if alias:
+            self._full_member(actor, alias["channel_id"])
+            previous = self.ledger.thread_attention(actor, alias["channel_id"], alias["root_id"])
+            if previous["followed"]:
+                # Reaffirming an existing follow keeps its visible cutoff but
+                # fences older automatic intents that have not settled yet.
+                return self.ledger.follow_thread(actor, alias["channel_id"], alias["root_id"], previous["after_seq"],
+                    expected_revision=previous["revision"], expected_membership_revision=previous["membership_revision"],
+                    expected_attention_revision=previous["attention_revision"])
+        revisions = {chat["id"]: self.ledger.notification_mode(actor, chat["id"])
+                     for chat in self.ledger.conversations(actor) if chat["role"] == "member"}
+        target = self._canonical_thread(actor, post_id)
+        if alias is not None and alias != target:
+            raise RuntimeError("Canonical post changed its conversation or thread")
+        channel, root = target["channel_id"], target["root_id"]
+        if channel not in revisions:
+            raise LedgerError("Thread notifications require full participation; check chats and retry")
+        revision = revisions[channel]
+        previous = self.ledger.thread_attention(actor, channel, root)
+        boundary = self.attention_boundary(actor, channel)
+        value = self.ledger.follow_thread(actor, channel, root, boundary,
+            expected_revision=previous["revision"], expected_membership_revision=revision["membership_revision"],
+            expected_attention_revision=revision["revision"])
+        self.ledger.remember_thread_alias(actor, post_id, channel, root)
+        return value
+
+    def unfollow(self, actor, post_id):
+        self.ledger.actor(actor)
+        target = self.ledger.resolve_thread_alias(actor, post_id)
+        if target is None:
+            try:
+                target = self._canonical_thread(actor, post_id)
+            except BackendError as error:
+                if error.status in (400, 403, 404):
+                    raise
+                raise LedgerError("Cannot resolve this post offline; use a canonical root from following, then retry unfollow") from error
+            except OSError as error:
+                raise LedgerError("Cannot resolve this post offline; use a canonical root from following, then retry unfollow") from error
+        value = self.ledger.unfollow_thread(actor, target["channel_id"], target["root_id"])
+        self.ledger.remember_thread_alias(actor, post_id, target["channel_id"], target["root_id"])
+        return value
+
+    def following(self, actor, channel=None):
+        self.ledger.actor(actor)
+        if channel is not None:
+            self.ledger.notification_mode(actor, channel)
+        return self.ledger.following(actor, channel)
 
     def channels(self, actor, query="", limit=20, after=None):
         self.ledger.actor(actor)
@@ -544,19 +677,70 @@ class Coordinator:
 
     def mutate(self, actor, action, **payload):
         """Commit intent before HTTP. A timeout holds the operation for inspection."""
-        operation = self.ledger.prepare_outbound(actor, dict(action=action, **payload))
+        options = {"auto_follow_after_seq": self._send_attention_boundary(actor, payload["channel_id"])} if action == "post" else {}
+        operation = self.ledger.prepare_outbound(actor, dict(action=action, **payload), **options)
         return self._execute(operation)
+
+    def _auto_follow_pending(self, operation):
+        return any(i["op_id"] == operation["op_id"] for i in self.ledger.pending_auto_follows(operation["actor"]))
+
+    def _canonical_outbound_post(self, operation, result):
+        """Authenticated operation proof binds IDs even after a post is deleted."""
+        payload = operation["payload"]
+        post = result.get("post") if isinstance(result, dict) else None
+        user_id = self.ledger.actor(operation["actor"])["user_id"]
+        if isinstance(post, dict):
+            if (not isinstance(post.get("id"), str) or not post["id"]
+                    or post.get("channel_id") != payload["channel_id"]
+                    or post.get("root_id", "") != payload.get("root_id", "")
+                    or post.get("user_id") != user_id or post.get("message") != payload.get("message")
+                    or post.get("system") or post.get("type", "").startswith("system_")):
+                raise BackendError("Canonical post differs from its frozen outbound intent", uncertain=True)
+            return post
+        metadata = operation_metadata(result)
+        if (not isinstance(metadata.get("post_id"), str) or not metadata["post_id"]
+                or metadata.get("channel_id") != payload["channel_id"]):
+            raise BackendError("Canonical post proof differs from its frozen destination", uncertain=True)
+        return {"id": metadata["post_id"], "channel_id": payload["channel_id"],
+                "root_id": payload.get("root_id", ""), "user_id": user_id}
+
+    def _complete_auto_follow(self, operation, result):
+        if self._auto_follow_pending(operation):
+            self.ledger.complete_auto_follow(operation["op_id"], self._canonical_outbound_post(operation, result))
+
+    def _refresh_join_access(self, operation):
+        try:
+            self.ledger.sync_conversations(operation["actor"], self.backend.conversations(operation["actor"]))
+        except (BackendError, OSError, ValueError) as error:
+            # The canonical join is already sealed. A failed access refresh
+            # must not turn that success into an uncertain operation to retry.
+            from .hooks import initialize, record_error
+            warning = "Join completed; access refresh failed. Run chats before send/notify: " + str(error)
+            initialize(self.ledger.db)
+            record_error(self.ledger, operation["actor"], "join_access_refresh", warning)
+            return warning
+        return None
 
     def _execute(self, operation):
         payload = dict(operation["payload"])
         action = payload.pop("action")
         try:
             result = self.backend.mutate(action, operation["actor"], operation["op_id"], **payload)
+            if action == "post" and self._auto_follow_pending(operation):
+                self._canonical_outbound_post(operation, result)
         except BackendError as error:
             self.ledger.set_outbound(operation["op_id"],
                                      "uncertain" if error.uncertain else "failed", error=str(error))
             raise
         self.ledger.set_outbound(operation["op_id"], "complete", result=operation_metadata(result))
+        if action == "post":
+            self._complete_auto_follow(operation, result)
+        elif action == "join":
+            # A confirmed observer-to-member transition must be available to
+            # immediate send/notify commands, before the next daemon feed.
+            warning = self._refresh_join_access(operation)
+            if warning:
+                result = dict(result, sync_warning=warning)
         return result
 
     def _upload_result(self, operation, result):
@@ -675,6 +859,7 @@ class Coordinator:
                                      result={"file_ids": file_ids}, error=str(error))
             raise
         self.ledger.settle_outbound(operation["op_id"], "complete", result=operation_metadata(result))
+        self._complete_auto_follow(operation, result)
         return result
 
     def _execute_attachment(self, operation):
@@ -728,7 +913,13 @@ class Coordinator:
                     if (metadata.get("channel_id") != operation["payload"]["channel_id"]
                             or not metadata.get("post_id")):
                         raise BackendError("Post recovery differs from its frozen destination", uncertain=True)
-        self.ledger.settle_outbound(operation["op_id"], status, result=metadata, error=result.get("error"))
+                if self._auto_follow_pending(operation):
+                    self._canonical_outbound_post(operation, result.get("result"))
+        settled = self.ledger.settle_outbound(operation["op_id"], status, result=metadata, error=result.get("error"))
+        if status == "complete" and operation["payload"].get("action") in ("post", "attachment_post"):
+            self._complete_auto_follow(operation, result.get("result"))
+        elif settled and status == "complete" and operation["payload"].get("action") == "join":
+            self._refresh_join_access(operation)
 
     def reconcile_outbound(self, actor, *, limit=None, operations=None, can_dispatch=None):
         operations = self.ledger.unresolved_outbounds(actor, limit) if operations is None else operations
@@ -743,6 +934,13 @@ class Coordinator:
                 self._dispatch_upload(operation, can_dispatch)
             else:
                 self._reconcile_one(operation)
+        # A crash can occur after durable canonical completion and before the
+        # local follow is activated. The sealed IDs suffice; do not fetch a
+        # potentially deleted post or move the original capture boundary.
+        for intent in self.ledger.pending_auto_follows(actor):
+            operation = self.ledger.outbound(intent["op_id"])
+            if operation["state"] == "complete":
+                self._complete_auto_follow(operation, operation["result"])
 
     def deliver(self, identity, *, expected_identity=None):
         if self.transport is None:

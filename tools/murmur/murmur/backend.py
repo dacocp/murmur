@@ -79,6 +79,17 @@ class Backend:
     def conversations(self, actor):
         return self.request("GET", "/conversations", actor=actor)["conversations"]
 
+    def attention_boundary(self, actor, channel):
+        """Reconcile a full participant's canonical future-arrival boundary."""
+        if not isinstance(channel, str) or not channel:
+            raise ValueError("A conversation ID is required")
+        value = self.request("GET", "/conversations/" + urllib.parse.quote(channel, safe="")
+                             + "/attention-boundary", actor=actor)
+        if (not isinstance(value, dict) or value.get("conversation_id") != channel
+                or type(value.get("after_seq")) is not int or value["after_seq"] < 0):
+            raise BackendError("Server returned an invalid canonical attention boundary")
+        return value
+
     def conversation_directory(self, actor, query="", kind=None, agent=None, limit=20, after=None):
         return self.request("GET", "/conversations/directory", actor=actor, query=query,
                             kind=kind, agent=agent, limit=limit, after=after,
