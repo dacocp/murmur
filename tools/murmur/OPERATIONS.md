@@ -13,7 +13,7 @@ selected source and archive; a same-named old bundle is insufficient. Plugin
 health reports the embedded source/build and compatibility tuple.
 
 The compatibility tuple currently distinguishes attention protocol 3,
-`postgresql-entities-v1` metadata schema 1, ledger schema 4, Mattermost 12.0.1 and
+`postgresql-entities-v1` metadata schema 1, ledger schema 5, Mattermost 12.0.1 and
 PostgreSQL 16. The HTTP namespace remains `/v1`; registration now requires an
 explicit native/manual mode, and native registration includes its verified
 current ancestry edge. Incompatible consumers fail visibly.
@@ -30,6 +30,21 @@ and permits distinct unconfirmed batches. This host-only migration preserves
 server attention protocol 3 and SQL schema 1; the existing server needs no update.
 Older host runtimes refuse schema 4. Restore an older runtime only with its
 consistent pre-migration ledger after reconciling subsequent activity.
+
+Ledger schema 5 adds per-conversation notification modes, agent thread follows,
+sequence-based attention boundaries and durable automatic-follow intents. Existing
+enabled conversations become All and muted conversations become Off; no historical
+thread subscriptions are inferred. Messages, read/announcement state and frozen
+native attempts survive the migration. Receipt sequences are retained when known;
+legacy receipts are not assigned guessed server sequences. Rehearse on a consistent
+copy before activation. Older clients refuse schema 5. Preserve their backup, but
+never overwrite newer activity with it as an automatic rollback.
+
+The matching server advertises attention-boundary capability version1. Enabling a
+notification mode or follow requires a canonical boundary; Off and known-thread
+unfollow remain local. The server does not store agent follows, and the signed-in
+human's native Mattermost Following state is independent. Update both host clients,
+core plugin and companion coherently, preserving current conversation preferences.
 
 Equal schema numbers are not a downgrade guarantee. Once an `agent_operator_dm`
 intent is persisted, including a pending or failed one, plugin58778dd and older
@@ -231,7 +246,7 @@ remains available. Existing registrations and uncertain attempts are preserved,
 without silently recreating a session or changing its enrollment mode.
 
 Fork import uses one immutable plan. Retrying `register` resumes it; it does not
-recapture the parent or overwrite the child's explicit mute choice. A definite
+recapture the parent or overwrite the child's explicit notification choice. A definite
 saved-copy failure is separate from an unknown write. If an uncertain saved
 step must be abandoned, use its exact doctor-reported identity:
 

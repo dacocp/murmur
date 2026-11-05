@@ -144,5 +144,21 @@ class Onboarding:
             self.coordinator._execute(operation)
         if self.ledger.outbound(op_id)["result"].get("channel_id") != channel["id"]:
             raise RuntimeError("Inherited join result belongs to another conversation")
+        # Versioned plans defer feed ingestion until copied preferences are in
+        # place. Old frozen plans retain their original join/mute semantics.
         self.coordinator.sync(self.actor)
-        self.step(key, "done", mute=channel["muted"])
+        snapshot = self.plan()["snapshot"]
+        if snapshot.get("attention_version") == 1:
+            after_seq = snapshot.get("attention_boundaries", {}).get(channel["id"])
+            if after_seq is None:
+                membership = self.ledger.notification_mode(self.actor, channel["id"])["membership_revision"]
+                after_seq = self.coordinator.attention_boundary(self.actor, channel["id"])
+                after_seq = self.ledger.freeze_channel_attention_boundary(
+                    self.actor, self.plan_id, channel["id"], after_seq,
+                    expected_membership_revision=membership)
+            self.ledger.apply_channel_attention(
+                self.actor, self.plan_id, channel["id"], channel["notification_mode"],
+                channel["followed_threads"], after_seq)
+            self.step(key, "done")
+        else:
+            self.step(key, "done", mute=channel["muted"])
