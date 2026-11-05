@@ -472,6 +472,9 @@ class PeerReceiptTests(unittest.TestCase):
                  (self.sha256, self.version, "ffffffffffff", False))
         for digest, version, build, accepted in cases:
             with self.subTest(digest=digest, version=version, build=build), ExitStack() as stack:
+                # Each mocked digest describes an independent measured binary;
+                # cache behavior has its own dedicated regression below.
+                stack.enter_context(patch.object(receipts, "_ENGINE_HASH_CACHE", None))
                 for item in self.owner_context(digest=digest, version=version, build=build):
                     stack.enter_context(item)
                 if accepted:
