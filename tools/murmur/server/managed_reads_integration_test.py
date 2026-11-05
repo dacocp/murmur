@@ -260,6 +260,7 @@ def run(fixture):
             expect_backend(400, lambda: runtime.conversation_directory(manual.actor, query=run_id, limit=1, after=page["next_after"]))
             completed.append("unenrolled callers, invalid versions and cross-scope directory cursors fail visibly")
 
+            assert members(server, channels) == memberships, "Quiet reads changed native member state"
             runtime.mutate(owner.actor, "post", channel_id=dm, message="Later private arrival " + run_id)
             for actor in readers:
                 runtime.sync(actor)
@@ -268,7 +269,14 @@ def run(fixture):
                 assert all(not rows for rows in attention(ledger, actor).values())
                 current = backend.changes(actor, feeds[actor]["cursor"], feeds[actor]["generation"])
                 assert current["changes"] == [] and current["generation"] == feeds[actor]["generation"]
-            assert members(server, channels) == memberships, "Reading implicitly changed native membership"
+            # A real DM arrival increments native mention counters. Membership,
+            # roles and notification preferences must still remain unchanged.
+            fields = ("channel_id", "user_id", "roles", "explicit_roles", "scheme_user", "scheme_admin", "scheme_guest", "notify_props")
+            current_members = members(server, channels)
+            for channel in channels:
+                expected = [{key: row.get(key) for key in fields} for row in memberships[channel]]
+                actual = [{key: row.get(key) for key in fields} for row in current_members[channel]]
+                assert actual == expected, "Reading implicitly changed native membership or notification preferences"
             completed.append("later arrivals do not create tracking, receipts, announcements or wake candidates")
 
             runtime.set_saved(reader.actor, roots[dm]["id"], True)
