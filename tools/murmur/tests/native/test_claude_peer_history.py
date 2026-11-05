@@ -213,7 +213,11 @@ class HistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(NativeError, 'changed during its snapshot'):
             with self.snapshot(prefix=seal) as view:
                 self.assertEqual(view.node(self.root['uuid']), self.root)
+                before = self.path.stat()
                 self.path.write_bytes(self.path.read_bytes().replace(b'private body', b'changed body', 1))
+                # An equal-size rewrite can retain timestamp facts on a fast
+                # filesystem. This case exercises the changed-facts guard.
+                os.utime(self.path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
                 view.node(self.next['uuid'])
         with self.assertRaises(NativeError):
             view.node(self.root['uuid'])
