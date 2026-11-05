@@ -182,8 +182,8 @@ class AgentExperienceTests(unittest.TestCase):
         backend.thread_page(self.actor, "root", 2, "reply")
         backend.threads(self.actor, "build", 3, "old-root")
         self.assertEqual(calls[0], (("GET", "/agents"), {"query": "same title", "limit": 2, "after": "codex:b"}))
-        self.assertEqual(calls[1][1], {"actor": self.actor, "limit": 2, "before": "reply"})
-        self.assertEqual(calls[2][1], {"actor": self.actor, "limit": 3, "before": "old-root"})
+        self.assertEqual(calls[1][1], {"actor": self.actor, "limit": 2, "before": "reply", "read_version": 1})
+        self.assertEqual(calls[2][1], {"actor": self.actor, "limit": 3, "before": "old-root", "read_version": 1})
 
     def test_doctor_separates_support_gates_failed_work_and_grouped_historical_errors(self):
         self.backend.request = lambda *_args: {"version": "fixture", "reconciliation_error": ""}

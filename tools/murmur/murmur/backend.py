@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .protocol import ATTENTION_VERSION
+from .protocol import ATTENTION_VERSION, MANAGED_CONVERSATION_READ_VERSION
 
 
 class BackendError(RuntimeError):
@@ -79,6 +79,11 @@ class Backend:
     def conversations(self, actor):
         return self.request("GET", "/conversations", actor=actor)["conversations"]
 
+    def conversation_directory(self, actor, query="", kind=None, agent=None, limit=20, after=None):
+        return self.request("GET", "/conversations/directory", actor=actor, query=query,
+                            kind=kind, agent=agent, limit=limit, after=after,
+                            read_version=MANAGED_CONVERSATION_READ_VERSION)
+
     def channels(self, actor, query="", limit=20, after=None):
         return self.request("GET", "/channels", actor=actor, query=query, limit=limit, after=after)
 
@@ -88,28 +93,34 @@ class Backend:
 
     def posts(self, actor, channel, limit=100, before=None):
         return self.request("GET", f"/conversations/{channel}/posts", actor=actor,
-                            limit=limit, before=before)
+                            limit=limit, before=before, read_version=MANAGED_CONVERSATION_READ_VERSION)
 
     def post(self, actor, post_id):
-        return self.request("GET", "/posts/" + post_id, actor=actor)["post"]
+        return self.request("GET", "/posts/" + post_id, actor=actor,
+                            read_version=MANAGED_CONVERSATION_READ_VERSION)["post"]
 
     def root(self, actor, post_id):
-        return self.request("GET", "/posts/" + post_id, actor=actor, as_root="true")["post"]
+        return self.request("GET", "/posts/" + post_id, actor=actor, as_root="true",
+                            read_version=MANAGED_CONVERSATION_READ_VERSION)["post"]
 
     def saved(self, actor):
-        return self.request("GET", "/saved", actor=actor)["saved"]
+        return self.request("GET", "/saved", actor=actor,
+                            read_version=MANAGED_CONVERSATION_READ_VERSION)["saved"]
 
     def set_saved(self, actor, post_id, starred):
-        return self.request("POST", "/saved/" + post_id, dict(actor=actor, starred=starred))
+        return self.request("POST", "/saved/" + post_id, dict(actor=actor, starred=starred),
+                            read_version=MANAGED_CONVERSATION_READ_VERSION)
 
     def thread(self, actor, root):
         return self.thread_page(actor, root, limit=200)["posts"]
 
     def thread_page(self, actor, root, limit=20, before=None):
-        return self.request("GET", "/threads/" + root, actor=actor, limit=limit, before=before)
+        return self.request("GET", "/threads/" + root, actor=actor, limit=limit, before=before,
+                            read_version=MANAGED_CONVERSATION_READ_VERSION)
 
     def threads(self, actor, channel, limit=20, before=None):
-        return self.request("GET", f"/conversations/{channel}/threads", actor=actor, limit=limit, before=before)
+        return self.request("GET", f"/conversations/{channel}/threads", actor=actor, limit=limit, before=before,
+                            read_version=MANAGED_CONVERSATION_READ_VERSION)
 
     def operation(self, actor, op_id):
         return self.request("GET", "/operations/" + op_id, actor=actor)
@@ -177,7 +188,8 @@ class Backend:
         return "/posts/" + urllib.parse.quote(post_id, safe="") + "/files/" + urllib.parse.quote(file_id, safe="")
 
     def file_info(self, actor, post_id, file_id):
-        value = self._attachment_json("GET", self._file_path(post_id, file_id) + "/info", actor=actor)
+        value = self._attachment_json("GET", self._file_path(post_id, file_id) + "/info", actor=actor,
+                                      read_version=MANAGED_CONVERSATION_READ_VERSION)
         info = value.get("file") if isinstance(value, dict) else None
         if (not isinstance(info, dict) or info.get("id") != file_id
                 or type(info.get("size")) is not int or info["size"] < 0):
@@ -191,7 +203,8 @@ class Backend:
             raise ValueError("Download output already exists; choose another path")
         temporary = None
         try:
-            with self._open_attachment("GET", self._file_path(post_id, file_id), actor=actor) as response:
+            with self._open_attachment("GET", self._file_path(post_id, file_id), actor=actor,
+                                       read_version=MANAGED_CONVERSATION_READ_VERSION) as response:
                 length = response.headers.get("Content-Length")
                 checksum = response.headers.get("X-Content-SHA256", "").lower()
                 if (length is not None and length != str(info["size"])):
