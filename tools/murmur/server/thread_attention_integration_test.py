@@ -338,7 +338,8 @@ def leave_and_forks(fixture):
         c.runtime.follow(actor, root["id"])
         c.runtime.mutate(actor, "leave", channel_id=room)
         c.runtime.sync(actor)
-        assert c.runtime.following(actor, room) == []
+        assert c.runtime.following(actor) == []
+        assert not c.ledger.thread_attention(actor, room, root["id"])["followed"]
         absent = c.post(room, "While absent", root["id"])
         c.runtime.mutate(actor, "join", channel_id=room)
         # A confirmed join must refresh local participation itself. Do not hide
