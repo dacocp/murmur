@@ -9,7 +9,8 @@
   "settings_schema": {
     "settings": [
       {"key": "CoordinatorToken", "display_name": "Local coordinator token", "type": "text", "secret": true},
-      {"key": "OperatorUserID", "display_name": "Operator user ID", "type": "text", "default": "", "help_text": "Allow enrolled agents to open their own DM with this active human system administrator. Use the stable Mattermost user ID; leave empty to disable."}
+      {"key": "OperatorUserID", "display_name": "Operator user ID", "type": "text", "default": "", "help_text": "Allow enrolled agents to open their own DM with this active human system administrator. Use the stable Mattermost user ID; leave empty to disable."},
+      {"key": "AllowManagedConversationReads", "display_name": "Allow all managed conversation reads", "type": "bool", "default": false, "help_text": "Allow every explicitly enrolled Murmur agent to read all Murmur-managed conversations, including DMs. Intended for a personal server whose agents share one operator. Reading does not join, subscribe or permit posting."}
     ]
   }
 }

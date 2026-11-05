@@ -14,6 +14,10 @@ type savedRequest struct {
 // Mattermost preferences are the only bookmark authority. Fetch by user rather
 // than GetFlaggedPosts: native membership filtering excludes Murmur observers.
 func (p *Plugin) saved(actor string) (map[string]any, error) {
+	return p.savedRead(actor, 0)
+}
+
+func (p *Plugin) savedRead(actor string, version int) (map[string]any, error) {
 	a, err := p.requireActor(actor)
 	if err != nil {
 		return nil, err
@@ -31,7 +35,7 @@ func (p *Plugin) saved(actor string) (map[string]any, error) {
 	sort.Strings(ids)
 	saved := []map[string]any{}
 	for _, id := range ids {
-		post, err := p.authorizedPost(actor, id)
+		post, err := p.authorizedReadPost(actor, id, version)
 		if err != nil {
 			if failure, ok := err.(*httpError); ok && (failure.status == 403 || failure.status == 404) {
 				saved = append(saved, map[string]any{"post_id": id, "unavailable": true})
@@ -46,6 +50,10 @@ func (p *Plugin) saved(actor string) (map[string]any, error) {
 }
 
 func (p *Plugin) setSaved(id string, req savedRequest) (map[string]any, error) {
+	return p.setSavedRead(id, req, 0)
+}
+
+func (p *Plugin) setSavedRead(id string, req savedRequest, version int) (map[string]any, error) {
 	a, err := p.requireActor(req.Actor)
 	if err != nil {
 		return nil, err
@@ -58,7 +66,7 @@ func (p *Plugin) setSaved(id string, req savedRequest) (map[string]any, error) {
 	}
 	preference := model.Preference{UserId: a.UserID, Category: model.PreferenceCategoryFlaggedPost, Name: id, Value: "true"}
 	if *req.Starred {
-		post, err := p.authorizedPost(req.Actor, id)
+		post, err := p.authorizedReadPost(req.Actor, id, version)
 		if err != nil {
 			return nil, err
 		}

@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+
+	"github.com/mattermost/mattermost/server/public/model"
 )
 
 func (p *Plugin) route(parts []string, r *http.Request) (any, error) {
@@ -93,6 +95,9 @@ func (p *Plugin) route(parts []string, r *http.Request) (any, error) {
 			return p.channelDirectory(actor, r)
 		}
 	case "conversations":
+		if len(parts) == 3 && parts[2] == "directory" && get {
+			return p.managedConversationDirectory(actor, r)
+		}
 		if len(parts) == 2 {
 			if post {
 				var req conversationRequest
@@ -121,7 +126,11 @@ func (p *Plugin) route(parts []string, r *http.Request) (any, error) {
 				if parts[3] == "threads" {
 					return p.conversationThreads(actor, channel, r)
 				}
-				if _, err := p.access(actor, channel, false); err != nil {
+				version, err := requestedReadVersion(r)
+				if err != nil {
+					return nil, err
+				}
+				if _, err := p.contentRead(actor, channel, version); err != nil {
 					return nil, err
 				}
 				posts, err := p.canonical(channel)
@@ -135,7 +144,7 @@ func (p *Plugin) route(parts []string, r *http.Request) (any, error) {
 				before := r.URL.Query().Get("before")
 				end := len(posts)
 				if before != "" {
-					beforePost, accessErr := p.authorizedPost(actor, before)
+					beforePost, accessErr := p.authorizedReadPost(actor, before, version)
 					if accessErr != nil {
 						return nil, accessErr
 					}
@@ -180,13 +189,17 @@ func (p *Plugin) route(parts []string, r *http.Request) (any, error) {
 			return p.send(req)
 		}
 		if len(parts) == 3 && get {
-			resolve := p.authorizedPost
+			version, err := requestedReadVersion(r)
+			if err != nil {
+				return nil, err
+			}
+			resolve := func(actor, id string) (*model.Post, error) { return p.authorizedReadPost(actor, id, version) }
 			if values, present := r.URL.Query()["as_root"]; present {
 				if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
 					return nil, bad(400, "as_root must be true or false")
 				}
 				if values[0] == "true" {
-					resolve = p.threadRoot
+					resolve = func(actor, id string) (*model.Post, error) { return p.readThreadRoot(actor, id, version) }
 				}
 			}
 			item, err := resolve(actor, parts[2])
@@ -224,14 +237,22 @@ func (p *Plugin) route(parts []string, r *http.Request) (any, error) {
 		}
 	case "saved":
 		if len(parts) == 2 && get {
-			return p.saved(actor)
+			version, err := requestedReadVersion(r)
+			if err != nil {
+				return nil, err
+			}
+			return p.savedRead(actor, version)
 		}
 		if len(parts) == 3 && post {
 			var req savedRequest
 			if err := decode(r, &req); err != nil {
 				return nil, err
 			}
-			return p.setSaved(parts[2], req)
+			version, err := requestedReadVersion(r)
+			if err != nil {
+				return nil, err
+			}
+			return p.setSavedRead(parts[2], req, version)
 		}
 	}
 	return nil, bad(404, "API route or method not found")

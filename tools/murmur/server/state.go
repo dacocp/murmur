@@ -547,6 +547,10 @@ func (p *Plugin) observe(posts []*model.Post) bool {
 }
 
 func (p *Plugin) authorizedPost(actor, id string) (*model.Post, error) {
+	return p.authorizedReadPost(actor, id, 0)
+}
+
+func (p *Plugin) authorizedReadPost(actor, id string, version int) (*model.Post, error) {
 	post, err := p.API.GetPost(id)
 	if err != nil {
 		if err.StatusCode == 403 || err.StatusCode == 404 {
@@ -560,7 +564,7 @@ func (p *Plugin) authorizedPost(actor, id string) (*model.Post, error) {
 	if post.DeleteAt != 0 {
 		return nil, bad(404, "post not found")
 	}
-	if _, accessErr := p.access(actor, post.ChannelId, false); accessErr != nil {
+	if _, accessErr := p.contentRead(actor, post.ChannelId, version); accessErr != nil {
 		return nil, accessErr
 	}
 	return post, nil

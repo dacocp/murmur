@@ -52,7 +52,8 @@ func TestOperatorReaderContextAndPrivateErrors(t *testing.T) {
 	}
 	boot := operatorWant(t, p, user.Id, "GET", "bootstrap", nil, 200)
 	if !reflect.DeepEqual(boot["capabilities"], map[string]any{"root_board": false, "exact_context": true, "full_history_search": false, "own_messages": false, "agent_activity": false, "personal_workspace": true,
-		"attachments": map[string]any{"enabled": true, "max_file_size": float64(100 * 1024 * 1024), "max_files_per_post": float64(10)}}) {
+		"attachments":                map[string]any{"enabled": true, "max_file_size": float64(100 * 1024 * 1024), "max_files_per_post": float64(10)},
+		"managed_conversation_reads": map[string]any{"version": float64(1), "enabled": false}}) {
 		t.Fatal(boot["capabilities"])
 	}
 }

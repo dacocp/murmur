@@ -215,7 +215,7 @@ func TestMetadataHealthExposesCompatibilityWithoutSecrets(t *testing.T) {
 	body := call(t, p, "health")
 	encoded, _ := json.Marshal(body)
 	compatibility := body["build"].(map[string]any)["compatibility"].(map[string]any)
-	if compatibility["attention_protocol"] != float64(3) || compatibility["metadata_schema"] != float64(1) || compatibility["ledger_schema"] != float64(3) {
+	if compatibility["attention_protocol"] != float64(3) || compatibility["metadata_schema"] != float64(1) || compatibility["ledger_schema"] != float64(4) {
 		t.Fatalf("incorrect naming compatibility boundary: %#v", compatibility)
 	}
 	for _, expected := range []string{"metadata_schema", metadataBackend, "source_sha256", "attention_protocol", "ledger_schema"} {
