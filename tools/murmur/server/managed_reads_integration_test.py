@@ -147,9 +147,9 @@ def run(fixture):
                 replies[room] = runtime.mutate(owner.actor, "post", channel_id=room,
                     message="Managed reply " + run_id, root_id=roots[room]["id"])["post"]
             filename, body, _ = fixtures()[0]
-            source = Path(directory) / filename
-            source.write_bytes(body)
-            file_post = runtime.send(owner.actor, dm, "Bound attachment " + run_id, files=[source])["post"]
+            attachment_source = Path(directory) / filename
+            attachment_source.write_bytes(body)
+            file_post = runtime.send(owner.actor, dm, "Bound attachment " + run_id, files=[attachment_source])["post"]
             file_id = file_post["file_ids"][0]
             seed_legacy_private(fixture, server, backend, private)
             team = server.native("/channels/" + public)["team_id"]
