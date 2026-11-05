@@ -14,7 +14,7 @@ from ops_files import private_json, read_private_json
 
 COMPATIBILITY = {"attention_protocol": 3, "metadata_schema": 1,
                  "metadata_backend": "postgresql-entities-v1", "mattermost": "12.0.1",
-                 "postgres_major": 16, "ledger_schema": 4}
+                 "postgres_major": 16, "ledger_schema": 5}
 MANIFEST = "release-manifest.json"
 
 

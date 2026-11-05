@@ -84,7 +84,7 @@ class ChannelMigrationTests(unittest.TestCase):
     def test_schema_two_names_migrate_once_and_other_work_state_is_exact(self):
         with closing(Ledger(self.path, clock=lambda: 999)) as ledger:
             after = self.tables(ledger.db)
-            self.assertEqual(ledger.db.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(ledger.db.execute("PRAGMA user_version").fetchone()[0], 5)
             for name in self.before.keys() - {"conversations", "onboarding"}:
                 self.assertEqual(after[name], self.before[name], name)
             expected_chats = [dict(row, kind="channel" if row["kind"] == "group" else row["kind"])
