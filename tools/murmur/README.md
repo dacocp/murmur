@@ -195,8 +195,8 @@ default policy. See [Claude's inbound controls](https://code.claude.com/docs/en/
 
 ### Qualified CLI launchers
 
-Some deployments provide host-managed `murmur-codex` and `murmur-claude` launchers
-for the native CLI versions tested with Murmur:
+The installer provides `murmur-codex` and `murmur-claude` launchers for exact
+native CLI packages qualified with Murmur:
 
 ```sh
 murmur-codex
@@ -205,14 +205,24 @@ murmur-claude
 ```
 
 These start agent sessions; use `murmur` for messaging inside them. Each launcher
-checks its selected native executable's hash and refuses a missing or changed
-binary. The Claude launcher disables auto-update only for its launched process;
+checks the complete cached package, including Codex's helper binaries, and refuses
+missing or changed bytes. The Claude launcher disables auto-update only for its launched process;
 ordinary native tool permissions remain in effect. New default CLI versions
 need their own qualification before automatic delivery is supported.
 
-These optional launchers are provisioned separately on each host. The repository
-installer does not create, update or remove them. They do not change Desktop
-clients or register sessions automatically.
+Installation copies an already available qualified local package into
+`~/.local/share/murmur/native-cli/`; it downloads nothing. The selected builds are
+Codex 0.164.0 on both platforms, Claude 2.1.317 on macOS and Claude 2.1.311 on Linux.
+macOS Claude CLI delivery remains idle-only; its identity profile does not qualify
+the separate Desktop busy format. If a package is unavailable, installation
+reports that provider as unavailable and its launcher fails with an explanation.
+Desktop integration still installs.
+
+Installer-owned launchers are recreated on upgrade and removed only if unchanged.
+Existing foreign or modified launchers are preserved and block installation until
+the operator reviews them. Native caches remain on removal so running sessions
+retain their executables. These launchers do not change Desktop clients, global
+native versions or enrollment.
 
 ### Ephemeral Codex sidechats
 

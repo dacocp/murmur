@@ -33,8 +33,14 @@ The measured Linux x86_64 Claude CLI profile is 2.1.311, SHA-256
 Its native registry uses raw `/proc/PID/stat` field 22 as a string for `procStart`,
 and `linux:<machine-id>:pid:[namespace-id]` for `pidDomain`. Creation certificates
 and target epochs retain this domain; they cannot adopt macOS certificates.
-The macOS 2.1.310 profile and legacy proof shapes remain unchanged. Linux Claude
-Desktop is unsupported. The Linux 2.1.311 CLI also supports a measured
+The macOS 2.1.310 profile and legacy proof shapes remain unchanged. The added
+macOS standalone 2.1.317 CLI profile pins SHA-256
+`09f153b46b5df9e8b3454716d682a91901de020cbca630f61dec1a015b32b5e9`.
+Its actual executable determines the measured version; native registry and
+creation facts must agree. Only the standard versioned path or the exact
+Murmur-managed native cache path qualifies. This CLI identity/lineage support
+retains idle-only delivery and does not certify Desktop or CLI busy receipts.
+Linux Claude Desktop is unsupported. The Linux 2.1.311 CLI also supports a measured
 `PostToolUse` context route. macOS CLI profiles retain idle delivery; the measured
 Desktop peer route is separate.
 

@@ -23,6 +23,7 @@ import tempfile
 import time
 
 import release as releases
+from murmur import qualified_cli
 
 LABEL = "local.murmur.mattermost"
 MARKER = "murmur-mattermost-owned-v1"
@@ -198,6 +199,12 @@ def _manifest(state, prefix, platform=None):
         raise InstallError("Installation manifest does not match this prefix and state")
     if value and value.get("bootstrap_inflight") and not value.get("job_owned"):
         raise InstallError("Service activation outcome is uncertain; inspect the service before retry or removal")
+    if value:
+        launchers = value.get("native_launchers", {})
+        if (not isinstance(launchers, dict) or set(launchers) - {"codex", "claude"}
+                or any(not isinstance(item, dict) or item.get("path") != str(prefix / ".local/bin" / f"murmur-{provider}")
+                       for provider, item in launchers.items())):
+            raise InstallError("Native launcher ownership does not match this prefix")
     return value
 
 
@@ -429,6 +436,13 @@ def _install(prefix, state, *, activate=False, source=None, python=None,
              else prefix / "Library/LaunchAgents" / f"{LABEL}.plist")
     if not _owned_file(launcher, (previous or {}).get("launcher")):
         raise InstallError(f"Foreign or modified launcher preserved: {launcher}")
+    native_launchers = {}
+    for provider in EVENTS:
+        path = prefix / ".local/bin" / f"murmur-{provider}"
+        old = (previous or {}).get("native_launchers", {}).get(provider)
+        if not _owned_file(path, old):
+            raise InstallError(f"Foreign or modified native launcher preserved: {path}")
+        native_launchers[provider] = {"path": path, "previous": old, "revision": _revision(path)}
     if not _owned_file(plist, (previous or {}).get("agent")):
         raise InstallError(f"Foreign or modified service preserved: {plist}")
     links = [prefix / f".{provider}/skills/murmur" for provider in EVENTS]
@@ -466,6 +480,14 @@ def _install(prefix, state, *, activate=False, source=None, python=None,
                       + 'if [ -z "${MURMUR_HOME:-}" ]; then\n'
                       + f"  MURMUR_HOME={shlex.quote(str(state))}\nfi\nexport MURMUR_HOME\n"
                       + "exec " + shlex.join([str(python), "-c", bootstrap]) + ' "$@"\n').encode()
+    native_status = {}
+    for provider, profile in qualified_cli.profiles(platform).items():
+        native_status[provider] = qualified_cli.prepare(prefix, provider, profile)
+        native_bootstrap = ("import sys;sys.path.insert(0," + repr(str(source))
+            + ");from murmur.qualified_cli import launch;launch("
+            + repr(str(prefix)) + "," + repr(provider) + "," + repr(platform) + ",sys.argv[1:])")
+        native_launchers[provider]["content"] = (f"#!/bin/sh\n# {MARKER}\n"
+            + "exec " + shlex.join([str(python), "-c", native_bootstrap]) + ' "$@"\n').encode()
     active = (previous or {}).get("active", False)
     agent = {"Label": LABEL, "ProgramArguments": [str(launcher), "daemon"],
              "EnvironmentVariables": {"MURMUR_HOME": str(state)},
@@ -508,6 +530,8 @@ def _install(prefix, state, *, activate=False, source=None, python=None,
                 "bootstrap_inflight": False,
                 "activation_pending": activate or (previous or {}).get("activation_pending", False),
                 "launcher": _file_record(launcher, launcher_bytes, (previous or {}).get("launcher")),
+                "native_launchers": {provider: _file_record(item["path"], item["content"], item["previous"])
+                                     for provider, item in native_launchers.items()},
                 "runtime": old_runtime if (active or (previous or {}).get("job_owned")) else runtime,
                 "pending_runtime": runtime,
                 "skills": [{"path": str(link), "target": str(skill), "targets": sorted({str(skill)} | {
@@ -522,6 +546,8 @@ def _install(prefix, state, *, activate=False, source=None, python=None,
         raise InstallError("Product source changed during installation; retry the reviewed source")
     for item in settings:
         _unchanged(Path(item["path"]), item["revision"])
+    for item in native_launchers.values():
+        _unchanged(item["path"], item["revision"])
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     (state / "logs").mkdir(exist_ok=True, mode=0o700)
     _atomic(state / "installation.json", _json_bytes(manifest))
@@ -538,6 +564,8 @@ def _install(prefix, state, *, activate=False, source=None, python=None,
         manifest["active"], manifest["job_owned"] = False, False
         _atomic(state / "installation.json", _json_bytes(manifest))
     _atomic(launcher, launcher_bytes, 0o755)
+    for item in native_launchers.values():
+        _atomic(item["path"], item["content"], 0o755, expected=item["revision"])
     for item in settings:
         _atomic(Path(item["path"]), item["content"], item["mode"], expected=item["revision"])
     for link in links:
@@ -548,7 +576,7 @@ def _install(prefix, state, *, activate=False, source=None, python=None,
                 temporary.symlink_to(skill)
                 os.replace(temporary, link)
     _atomic(plist, plist_bytes)
-    for item in (manifest["launcher"], manifest["agent"]):
+    for item in (manifest["launcher"], manifest["agent"], *manifest["native_launchers"].values()):
         item["sha256s"] = [item["sha256"]]
     for item, desired in zip(manifest["settings"], settings):
         item["commands"] = desired["desired_commands"]
@@ -587,6 +615,7 @@ def _install(prefix, state, *, activate=False, source=None, python=None,
         _atomic(state / "installation.json", _json_bytes(manifest))
     return {"installed": True, "active": manifest["active"], "state": str(state),
             "launcher": str(launcher), "runtime": runtime,
+            "native_clis": native_status,
             "codex_review": "Review the new definitions in Codex /hooks."}
 
 
@@ -641,7 +670,7 @@ def _remove(prefix, state, *, runner=None, platform=None):
             path.unlink()
         elif path.exists() or path.is_symlink():
             preserved.append(str(path))
-    for item in (manifest["launcher"], manifest["agent"]):
+    for item in (manifest["launcher"], manifest["agent"], *manifest.get("native_launchers", {}).values()):
         path = Path(item["path"])
         if path.exists() and _owned_file(path, item):
             path.unlink()

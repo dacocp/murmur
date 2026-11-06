@@ -94,6 +94,7 @@ class InstallTests(unittest.TestCase):
         result = self.install()
         self.assertFalse(result["active"])
         self.assertEqual(self.launches, [])
+
         self.assertEqual(toml.read_bytes(), b"[features]\nhooks = false\n# keep trust settings\n")
         value = json.loads(codex.read_text())
         self.assertEqual(value["hooks"]["Stop"][0], original["hooks"]["Stop"][0])
@@ -115,6 +116,69 @@ class InstallTests(unittest.TestCase):
         self.assertFalse((self.prefix / ".local/bin/murmur").exists())
         self.assertTrue(self.state.exists())
         self.assertEqual(self.launches, [])
+
+    def test_native_launchers_are_owned_recreated_and_removed_without_deleting_caches(self):
+        result = self.install()
+        self.assertEqual(set(result["native_clis"]), {"codex", "claude"})
+        self.assertTrue(all(item["status"] == "unavailable" for item in result["native_clis"].values()))
+        codex = self.prefix / ".local/bin/murmur-codex"
+        claude = self.prefix / ".local/bin/murmur-claude"
+        self.assertIn(installer.MARKER, codex.read_text())
+        codex.unlink()
+        self.install()
+        self.assertTrue(codex.is_file())
+        claude.write_text("user replaced this wrapper")
+        cache = self.prefix / ".local/share/murmur/native-cli/retained-cache"
+        cache.mkdir(parents=True)
+        (cache / "retained").write_text("active native process may use this")
+        result = installer.remove(self.prefix, self.state)
+        self.assertFalse(codex.exists())
+        self.assertEqual(claude.read_text(), "user replaced this wrapper")
+        self.assertIn(str(claude), result["preserved"])
+        self.assertTrue((cache / "retained").exists())
+
+    def test_native_launcher_foreign_collision_is_preserved_before_any_installation_write(self):
+        for provider in ("codex", "claude"):
+            with self.subTest(provider=provider):
+                path = self.prefix / ".local/bin" / f"murmur-{provider}"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("foreign wrapper")
+                before = self.installation_snapshot()
+                with self.assertRaisesRegex(installer.InstallError, "Foreign or modified native launcher"):
+                    self.install()
+                self.assertEqual(self.installation_snapshot(), before)
+                path.unlink()
+
+    def test_native_wrapper_binds_captured_runtime_and_forwards_arguments_from_other_cwd(self):
+        (self.source / "murmur/qualified_cli.py").write_text(
+            "import json\ndef launch(prefix,provider,platform,arguments):\n"
+            " print(json.dumps([prefix,provider,platform,arguments]))\n")
+        self.install()
+        arguments = ["--resume", "exact-session", "spaces ' $()"]
+        result = subprocess.run([str(self.prefix / ".local/bin/murmur-codex"), *arguments],
+                                cwd="/", check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(result.stdout), [str(self.prefix), "codex", "darwin", arguments])
+
+    def test_native_launcher_journal_cannot_remove_an_arbitrary_path(self):
+        self.install()
+        journal = self.state / "installation.json"
+        document = json.loads(journal.read_text())
+        document["native_launchers"]["codex"]["path"] = str(self.prefix / "unrelated")
+        journal.write_text(json.dumps(document))
+        with self.assertRaisesRegex(installer.InstallError, "ownership does not match"):
+            installer.remove(self.prefix, self.state)
+
+    def test_native_launcher_created_during_cache_preparation_is_preserved(self):
+        foreign = self.prefix / ".local/bin/murmur-claude"
+        def prepare(*args):
+            foreign.parent.mkdir(parents=True, exist_ok=True)
+            foreign.write_text("arrived concurrently")
+            return {"status": "unavailable"}
+        with patch.object(installer.qualified_cli, "prepare", side_effect=prepare), \
+                self.assertRaisesRegex(installer.InstallError, "Settings changed during installation"):
+            self.install()
+        self.assertEqual(foreign.read_text(), "arrived concurrently")
+        self.assertFalse((self.state / "installation.json").exists())
 
     def test_claude_peer_acceptance_default_preserves_absent_and_existing_policy(self):
         for policy in (None, "hold", "refuse", "accept"):

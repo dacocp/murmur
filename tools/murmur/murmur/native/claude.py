@@ -22,6 +22,8 @@ from .types import DeliveryResult, IdentityError, NativeError, NativeIdentity
 
 CLI_VERSION = "2.1.310"
 CLI_SHA256 = "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd"
+MAC_CLI_317_VERSION = "2.1.317"
+MAC_CLI_317_SHA256 = "09f153b46b5df9e8b3454716d682a91901de020cbca630f61dec1a015b32b5e9"
 LINUX_CLI_VERSION = "2.1.311"
 LINUX_CLI_SHA256 = "86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada"
 MAX_METADATA_BYTES = 4 * 1024 * 1024
@@ -33,12 +35,19 @@ def _platform():
     return sys.platform
 
 
-def _cli_profile():
+def _cli_profile(digest=None):
     if _platform() == "darwin":
-        return CLI_VERSION, CLI_SHA256
-    if _platform() == "linux":
-        return LINUX_CLI_VERSION, LINUX_CLI_SHA256
-    raise IdentityError("Standalone Claude platform is unsupported")
+        profiles = ((CLI_VERSION, CLI_SHA256), (MAC_CLI_317_VERSION, MAC_CLI_317_SHA256))
+    elif _platform() == "linux":
+        profiles = ((LINUX_CLI_VERSION, LINUX_CLI_SHA256),)
+    else:
+        raise IdentityError("Standalone Claude platform is unsupported")
+    if digest is None:
+        return profiles[0]
+    for version, expected in profiles:
+        if digest == expected:
+            return version, expected
+    raise IdentityError("Standalone Claude executable version is unsupported")
 
 
 def _pid_domain():
@@ -174,7 +183,6 @@ def _plain_arguments(argv, executable, *, deadline=None):
 
 def _cli_facts(engine, pid, env, invoking=True, timeout=3):
     deadline = files.deadline(timeout)
-    version, expected_sha = _cli_profile()
     domain = _pid_domain()
     verified = process.invoking(pid, timeout=files.remaining(deadline)) if invoking else None
     if verified is None:
@@ -185,13 +193,14 @@ def _cli_facts(engine, pid, env, invoking=True, timeout=3):
     try:
         executable, argv = process.inspect(pid)
         executable = Path(executable).resolve(strict=True)
+        digest = files.executable_sha256(executable, deadline)
+        version, expected_sha = _cli_profile(digest)
         installed = (_home(env) / ".local/bin/claude").resolve()
         pinned = _home(env) / ".local/share/claude/versions" / version
-        if executable not in {installed, pinned}:
+        managed = (_home(env) / ".local/share/murmur/native-cli/claude" /
+                   expected_sha / "package/claude")
+        if executable not in {installed, pinned, managed}:
             raise IdentityError("Standalone Claude executable is not the supported native installation")
-        digest = files.executable_sha256(executable, deadline)
-        if digest != expected_sha:
-            raise IdentityError("Standalone Claude executable version is unsupported")
         # Validate argv[0] before interpreting any option: KERN_PROCARGS2 cannot
         # distinguish empty argv[0] from alignment padding and an env suffix.
         if (not argv or (argv[0] != "claude" and
@@ -259,10 +268,11 @@ def current_identity(payload=None, *, env=None, timeout=3):
     process.invoking(pid, record["procStart"], timeout=files.remaining(deadline))
     host = record.get("hostSessionId")
     if host is None:
-        if (record.get("entrypoint") != "cli" or record.get("kind") != "interactive"
-                or record.get("version") != _cli_profile()[0]):
+        if record.get("entrypoint") != "cli" or record.get("kind") != "interactive":
             raise IdentityError("Standalone Claude runtime is unsupported")
         facts = _cli_facts(engine, pid, env, timeout=files.remaining(deadline))
+        if record.get("version") != facts["version"]:
+            raise IdentityError("Standalone Claude runtime is unsupported")
         return NativeIdentity("claude", engine, target=_target(record, config, cli=facts))
     if (_platform() != "darwin" or host != env.get("CLAUDE_CODE_HOST_SESSION_ID")
             or record.get("entrypoint") not in ("claude-desktop", "claude-desktop-3p")):
@@ -380,7 +390,7 @@ def resolve_identity(identity, *, timeout=3, lineage_proof=None):
         known = [*known, *supplied["ancestors"]]
     proof = lineage.certify(identity.session_id, observations=supplied.get("observations", ()),
                             known=known, config_dir=target["config_dir"], process={
-                                **verified.target, "entrypoint": "cli", "version": _cli_profile()[0]})
+                                **verified.target, "entrypoint": "cli"})
     return replace(verified, parent_session_id=proof["parent_session_id"], parent_known=True,
                    evidence={**identity.evidence, "parent_proof": proof, "lineage_complete": True,
                              "lineage_edges": [{"session_id": item["session_id"],
@@ -417,8 +427,7 @@ def _fresh_record(identity, timeout):
         facts = None
     else:
         if (record.get("hostSessionId") is not None or record.get("sessionId") != _uuid(identity.session_id)
-                or record.get("entrypoint") != "cli" or record.get("kind") != "interactive"
-                or record.get("version") != _cli_profile()[0]):
+                or record.get("entrypoint") != "cli" or record.get("kind") != "interactive"):
             raise IdentityError("Claude target standalone registry binding changed")
         # Only routing HOME is needed here; executable/version checks are local.
         home = target.get("home_dir")
@@ -426,6 +435,9 @@ def _fresh_record(identity, timeout):
             raise IdentityError("Claude CLI target lacks its verified executable home routing")
         facts = _cli_facts(engine, pid, {"HOME": home, "CLAUDE_CONFIG_DIR": str(config)},
                            invoking=False, timeout=files.remaining(deadline))
+        if (record.get("version") != facts["version"]
+                or target.get("version", facts["version"]) != facts["version"]):
+            raise IdentityError("Claude target standalone registry binding changed")
     fresh = _target(record, config, target.get("metadata_root"), cli=facts)
     return record, replace(identity, target=fresh)
 
