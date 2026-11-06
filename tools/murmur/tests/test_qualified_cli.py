@@ -75,6 +75,49 @@ class QualifiedCLITests(unittest.TestCase):
         with self.assertRaisesRegex(cli.QualifiedCLIError, "unavailable"):
             cli.verify(self.home, "codex", self.profile)
 
+    def test_owned_group_writable_source_root_copies_to_strict_private_cache(self):
+        self.source.chmod(0o775)
+        ready = self.prepare()
+        package = Path(ready["binary"]).parents[1]
+        self.assertEqual(self.source.stat().st_mode & 0o777, 0o775)
+        self.assertEqual(package.stat().st_mode & 0o777, 0o700)
+        package.chmod(0o775)
+        with self.assertRaisesRegex(cli.QualifiedCLIError, "root has unsafe"):
+            self.prepare()
+
+    def test_source_exception_never_accepts_world_write_foreign_owner_or_unsafe_descendants(self):
+        self.source.chmod(0o777)
+        with self.assertRaisesRegex(cli.QualifiedCLIError, "root has unsafe"):
+            self.prepare()
+        self.source.chmod(0o775)
+        root_stat = self.source.stat()
+        from types import SimpleNamespace
+        fake = SimpleNamespace(st_uid=os.getuid() + 1, st_mode=root_stat.st_mode)
+        original = Path.stat
+        def foreign_owner(path, *args, **kwargs):
+            if path == self.source and not kwargs.get("follow_symlinks") is False:
+                return fake
+            return original(path, *args, **kwargs)
+        with patch.object(Path, "stat", foreign_owner), self.assertRaisesRegex(cli.QualifiedCLIError, "root has unsafe"):
+            self.prepare()
+        helper = self.source / "helper"
+        helper.chmod(0o660)
+        with self.assertRaisesRegex(ValueError, "safe regular file"):
+            self.prepare()
+        helper.chmod(0o600)
+        (self.source / "bin").chmod(0o775)
+        with self.assertRaisesRegex(cli.QualifiedCLIError, "unsafe ownership or permissions"):
+            self.prepare()
+        (self.source / "bin").chmod(0o700)
+        copy = cli.shutil.copytree
+        def change_source_after_copy(*args, **kwargs):
+            result = copy(*args, **kwargs)
+            self.source.chmod(0o777)
+            return result
+        with patch.object(cli.shutil, "copytree", side_effect=change_source_after_copy), \
+                self.assertRaisesRegex(cli.QualifiedCLIError, "root has unsafe"):
+            self.prepare()
+
     def test_concurrent_unknown_empty_cache_keeps_its_inode(self):
         destination = cli.cache_path(self.home, "codex", self.profile)
         original = cli._publish

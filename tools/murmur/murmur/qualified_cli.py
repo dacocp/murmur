@@ -64,11 +64,18 @@ def cache_path(prefix, provider, profile):
     return Path(prefix) / ".local/share/murmur/native-cli" / provider / profile["sha256"]
 
 
-def _tree(root):
+def _tree(root, *, capture_source=False):
     """Bind every regular file and internal symlink, including native helpers."""
     root = Path(root)
-    if root.is_symlink() or not root.is_dir() or root.stat().st_mode & 0o022:
+    if root.is_symlink() or not root.is_dir():
         raise QualifiedCLIError("Native package is missing or is a symlink")
+    info = root.stat()
+    # A local installer may have created the source's outer directory under
+    # umask 002. Its exact pinned contents are copied into our private cache;
+    # only that owned source root may be group-writable, never its descendants
+    # or the published cache. World-write and foreign ownership always fail.
+    if info.st_uid != os.getuid() or info.st_mode & (0o002 if capture_source else 0o022):
+        raise QualifiedCLIError("Native package root has unsafe ownership or permissions")
     result, size = {}, 0
     deadline = time.monotonic() + 30
     for path in sorted(root.rglob("*")):
@@ -146,11 +153,12 @@ def prepare(prefix, provider, profile):
     try:
         package = temporary / "package"
         if profile["package"]:
-            original = _tree(source)
+            original = _tree(source, capture_source=True)
             if _digest(original) != _expected(profile):
                 raise QualifiedCLIError("Local native package is not the exact qualified package")
             shutil.copytree(source, package, symlinks=True)
-            if _tree(source) != original:
+            package.chmod(0o700)
+            if _tree(source, capture_source=True) != original:
                 raise QualifiedCLIError("Local native package changed while copying")
         else:
             if source.is_symlink() or files.executable_sha256(source, time.monotonic() + 15) != profile["sha256"]:
