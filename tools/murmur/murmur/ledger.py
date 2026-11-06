@@ -215,6 +215,30 @@ class Ledger:
             self.db.close()
             raise
 
+    @classmethod
+    def open_readonly(cls, path, *, clock=None, timeout=.2):
+        """Inspect an existing operational ledger without initialization or migration."""
+        source = Path(path).expanduser()
+        if not source.is_file():
+            raise LedgerError("No existing Murmur ledger is available for local inspection")
+        result = cls.__new__(cls)
+        result.path = str(source.resolve(strict=True))
+        result.clock = clock or (lambda: time.time_ns() // 1_000_000)
+        result.db = sqlite3.connect(Path(result.path).as_uri() + "?mode=ro", uri=True,
+                                    timeout=timeout, isolation_level=None)
+        result.db.row_factory = sqlite3.Row
+        try:
+            result.db.execute("PRAGMA query_only=ON")
+            result.db.execute("BEGIN")
+            version = result.db.execute("PRAGMA user_version").fetchone()[0]
+            if version != LEDGER_SCHEMA_VERSION:
+                raise LedgerError("Local inspection requires ledger schema " + str(LEDGER_SCHEMA_VERSION) +
+                                  "; found " + str(version) + ". Use its compatible Murmur runtime; no migration was run")
+        except BaseException:
+            result.db.close()
+            raise
+        return result
+
     def _upgrade_schema(self, version):
         with self._write():
             actor_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(actors)")}
@@ -1444,6 +1468,80 @@ class Ledger:
         if actor is not None:
             query, args = query + " WHERE actor=?", (actor,)
         return [self.attempt(r[0]) for r in self.db.execute(query + " ORDER BY created_at,token", args)]
+
+    def notification_diagnostics(self, actor, *, token=None, limit=20, active_only=False, newest_first=False):
+        """Own-session metadata only; inspection never acknowledges or reconciles work."""
+        self._require_actor(actor)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise LedgerError("Diagnostic limit must be between 1 and 100")
+        args = [actor]
+        scope = "a.actor=?"
+        if token is not None:
+            if not isinstance(token, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", token) is None:
+                raise LedgerError("Notification is not recorded for this session")
+            scope += " AND a.token=?"
+            args.append(token)
+        else:
+            scope += " AND (a.status IN ('pending','admitted')"
+            if not active_only:
+                scope += """ OR (a.mode='context' AND a.status='retired' AND a.admitted_at IS NULL
+                    AND a.verification_json IS NULL AND a.emitted_at IS NOT NULL AND a.transport<>'rejected')"""
+            scope += ")"
+        counts = self.db.execute("""SELECT count(*) AS total,
+            COALESCE(sum(a.admitted_at IS NULL AND a.verification_json IS NULL),0) AS unconfirmed_native_count
+            FROM attempts a WHERE """ + scope, args).fetchone()
+        if token is not None and not counts["total"]:
+            raise LedgerError("Notification is not recorded for this session")
+        query = """SELECT a.token,a.mode,a.status,a.transport,a.epoch,a.turn_key,a.expected_turn_key,a.tool_id,
+            a.created_at,a.emitted_at,a.admitted_at,a.completed_at,a.agent_seen_at,substr(a.reason,1,1000) AS reason,
+            a.verification_json IS NOT NULL AS verification_present,
+            json_extract(a.emission_json,'$.kind') AS handoff_kind,
+            json_extract(a.evidence_json,'$.recovery') AS idle_recovery_json,
+            CASE WHEN json_type(a.evidence_json,'$.detail')='text'
+                THEN substr(json_extract(a.evidence_json,'$.detail'),1,1000) END AS transport_detail,
+            json_array_length(a.post_ids_json) AS batch_post_count,
+            (SELECT count(*) FROM json_each(a.post_ids_json) ids JOIN receipts r
+                ON r.actor=a.actor AND r.post_id=ids.value) AS tracked_post_count,
+            (SELECT count(*) FROM json_each(a.post_ids_json) ids JOIN receipts r
+                ON r.actor=a.actor AND r.post_id=ids.value WHERE r.read_at IS NOT NULL) AS read_post_count,
+            (SELECT count(*) FROM json_each(a.post_ids_json) ids JOIN receipts r
+                ON r.actor=a.actor AND r.post_id=ids.value WHERE r.read_at IS NULL AND r.unavailable_at IS NULL) AS unread_post_count,
+            (SELECT count(*) FROM json_each(a.post_ids_json) ids JOIN receipts r
+                ON r.actor=a.actor AND r.post_id=ids.value WHERE r.unavailable_at IS NOT NULL) AS unavailable_post_count,
+            (SELECT max(r.read_at) FROM json_each(a.post_ids_json) ids JOIN receipts r
+                ON r.actor=a.actor AND r.post_id=ids.value) AS last_read_at,
+            (SELECT status FROM native_turn_records n WHERE n.actor=a.actor AND n.epoch=a.epoch
+                AND n.turn_key=COALESCE(a.turn_key,a.expected_turn_key)) AS enclosing_turn_status
+            FROM attempts a WHERE """ + scope
+        query += " ORDER BY a.created_at" + (" DESC" if newest_first else "") + ",a.token LIMIT ?"
+        rows = [dict(row) for row in self.db.execute(query, [*args, limit])]
+        observations = self._notification_observations(actor, [row["token"] for row in rows])
+        for row in rows:
+            row["observation"] = observations.get(row["token"])
+        return {"attempts": rows, "total": counts["total"],
+                "unconfirmed_native_count": counts["unconfirmed_native_count"],
+                "truncated": counts["total"] > len(rows)}
+
+    def _notification_observations(self, actor, tokens):
+        if not tokens or not self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='diagnostics'").fetchone():
+            return {}
+        # The coordinator records objects for idle recovery and arrays for native
+        # receipt checks. Malformed/truncated errors cannot establish a token's reason.
+        placeholders = ",".join("?" for _ in tokens)
+        query = """WITH observations AS (
+            SELECT d.id,d.surface,d.created_at,
+                CASE WHEN entry.type='object' THEN json_extract(entry.value,'$.token') END AS token,
+                CASE WHEN entry.type='object' THEN CASE WHEN json_type(entry.value,'$.reason')='text'
+                    THEN json_extract(entry.value,'$.reason') END END AS reason
+            FROM diagnostics d,json_each(CASE WHEN json_valid(d.error) THEN
+                CASE WHEN json_type(d.error)='array' THEN d.error ELSE '['||d.error||']' END
+                ELSE '[]' END) entry
+            WHERE d.actor=? AND d.surface IN ('native_receipt','idle_recovery')),
+            ranked AS (SELECT *,row_number() OVER(PARTITION BY token ORDER BY created_at DESC,id DESC) AS position
+                FROM observations WHERE token IN (""" + placeholders + """) AND typeof(reason)='text')
+            SELECT token,surface,created_at,substr(reason,1,1000) AS reason FROM ranked WHERE position=1"""
+        return {row["token"]: dict(row) for row in self.db.execute(query, [actor, *tokens])}
 
     def pending_attempts(self, actor=None):
         query = "SELECT token FROM attempts WHERE status IN ('pending','admitted')"

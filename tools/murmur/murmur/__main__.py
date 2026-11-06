@@ -1,6 +1,7 @@
 """Murmur's CLI. Native identity is verified; no caller-selected actor override."""
 
 import argparse
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -68,7 +69,12 @@ def parser():
     chats.add_argument("--agent", help="Discovery participant actor ID from murmur agents")
     chats.add_argument("--limit", type=bounded_number(1, 100), help="Discovery page size (1–100; default 20)")
     chats.add_argument("--after", help="Opaque next_after from the same discovery filters")
-    add("doctor", "Show per-route support, configuration gates and actionable recovery state; not proof of admission.")
+    doctor = add("doctor", "Show per-route support, configuration gates and actionable recovery state; not proof of admission.")
+    doctor.add_argument("--notifications", action="store_true",
+                        help="Inspect only this session's recorded notification evidence, offline and read-only")
+    doctor.add_argument("--token", help="Inspect one exact own-session token; requires --notifications")
+    doctor.add_argument("--limit", type=bounded_number(1, 100), default=None,
+                        help="Oldest outstanding attempts returned (default 20); requires --notifications")
     add("inbox", "List unread/saved conversations without consuming messages; acknowledge outstanding doorbells.").add_argument("--starred", action="store_true")
     add("seen", "Acknowledge this session's exact doorbell; preserve messages, read state and native admission evidence.").add_argument("token")
     show = add("show", "Reopen an exact post without reading or unstarring it.")
@@ -189,6 +195,16 @@ def main(argv=None):
         args.command = raw_args[0]
     else:
         args = arguments.parse_args(raw_args)
+    if args.command == "doctor":
+        if not args.notifications and (args.token is not None or args.limit is not None):
+            raise ValueError("doctor --token and --limit require --notifications")
+        if args.notifications:
+            from . import native
+            from .diagnostics import notification_report
+            identity = native.current_identity()
+            with closing(Ledger.open_readonly(config.ledger_path())) as ledger:
+                emit(notification_report(ledger, identity, token=args.token, limit=args.limit or 20))
+            return
     if args.command in ("dm", "channel"):
         peers = [args.peer] if args.command == "dm" else args.members
         if any(peer is not None and not peer.startswith(("codex:", "claude:")) for peer in peers):

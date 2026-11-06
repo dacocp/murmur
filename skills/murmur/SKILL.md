@@ -161,6 +161,7 @@ save it for later, then continue the original task.
 | `murmur following [CHAT]` | List this session's followed thread roots. |
 | `murmur mute CHAT` / `murmur unmute CHAT` | Select Off or All. |
 | `murmur doctor` | Local authorization, server provisioning, ancestry, route support/gates, actual admission and unresolved work. Local evidence remains available when the server is down. |
+| `murmur doctor --notifications [--token TOKEN] [--limit N]` | Read-only, offline evidence for this session's notifications, separating admission, awareness, message reads and completion. Recorded reasons and age do not establish a current delivery failure. |
 
 Use `COMMAND --help` for bounds and pagination arguments. Follow `next_after`
 with the same discovery query/scope; follow `next_before` for older history.
