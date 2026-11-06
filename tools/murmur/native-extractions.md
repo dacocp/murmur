@@ -155,13 +155,21 @@ native key; `post_tool` additionally carries the actual tool ID and local
 transcript path. SessionEnd never invents a key. No hook result enrolls an agent.
 
 `prepare_context_receipt(captured)` locally certifies the invoking Codex backend
-and freezes a bounded canonical JSONL baseline before context emission. It records
-the actual starting ordinal, which can be nonzero in a fork, and verifies exact
-continuity. Older schema-1 captures without that field retain their certified
-zero base; a nonzero header cannot use that compatibility default.
+and captures canonical JSONL evidence before the ledger creates the notification
+token. The exact alpha6 writer uses schema 2 (`codex-canonical-event-jsonl`):
+the creation header, complete EOF frontier and last complete record anchor bind
+the recipient, file identity and new-event window. Verification reads only that
+bounded evidence and new outer records, with contiguous ordinals after the anchor.
+It does not certify the distant historical prefix. A matching receipt can settle
+without parsing unrelated later records.
+
+Earlier profiles and saved schema-1 requests, including ones captured under
+alpha6, keep full-prefix verification. Their starting ordinal can be nonzero in
+a fork. Older schema-1 captures without that field retain their certified zero
+base; a nonzero header cannot use that compatibility default.
 `verify_context_receipt(identity, attempt, timeout=0.5)` returns `accepted` with
 evidence or `unknown` with a reason. It checks the exact appended developer
-message, hook classification, recipient, turn, token and immutable baseline;
+message, hook classification, recipient, turn, token and captured evidence;
 SQLite UI projections are insufficient. The coordinator owns claims, frozen
 context, receipt verification and announcement. Delayed verification can settle
 an ended turn without requiring its former process to remain alive.
@@ -175,15 +183,16 @@ metadata of 1–128 characters with no surrounding whitespace. Both recipient ID
 paginated mode and the starting ordinal remain mandatory. The creator label never
 certifies an executing engine. Earlier profiles retain their measured
 creation-version pairs. Native resume and append compatibility need their own
-actual admission evidence; idle preparation inspects only the header, while busy
-capture validates and freezes the full baseline. Modern append profiles require strict harness-hook provenance;
+actual admission evidence; idle preparation inspects only the header. Modern append profiles require strict harness-hook provenance;
 only the exact legacy 0.163 profile retains its earlier
 provenance compatibility. Existing receipts retain their frozen append profile.
-The 256 MiB source bound, independent 8 MiB JSONL record budget, one-second
-capture deadline and half-second verification deadline fail visibly. These are
-reader resource budgets, not native format maxima. Full baseline and compaction
-records retain strict JSON and ordinal validation; nested replacement history
-cannot supply a receipt. Receipt means native history acceptance, not model
+Schema 2 limits headers and records to 8 MiB and the new-record scan extent to
+16 MiB; integrity rereads add bounded I/O. It has no total-history size ceiling.
+Schema 1 retains its 256 MiB source bound. Both keep the one-second capture and
+half-second verification deadlines. These are reader resource budgets, not native
+format maxima. Records in the verified window retain strict JSON and ordinal
+validation; nested replacement history cannot supply a receipt.
+Receipt means native history acceptance, not model
 sampling, inbox reading or power-loss durability. Unsupported versions,
 quotations, inherited history, replacement/truncation and uncertain evidence
 cannot announce mail. Context-only delivery never blocks the original task.

@@ -9,6 +9,7 @@ message itself has no tool ID.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -21,7 +22,7 @@ from .hooks import parse_wake
 from .files import executable_sha256
 from .types import HookEvent, NativeError, NativeIdentity
 
-_MAX_FILE = 256 * 1024 * 1024
+_MAX_FILE = 256 * 1024 * 1024  # Legacy schema-1 full snapshots only.
 # Long histories need a larger total budget without widening the decoder's
 # separate per-record budget. These are reader limits, not native maxima.
 _MAX_LINE = 8 * 1024 * 1024
@@ -48,6 +49,10 @@ _LEGACY_PROVENANCE_PROFILES = frozenset({
     "1afb28c01d7d49e892bd75f11076b10f1451e34e0ee308a95e5ab7f69f9c84fe",
 })
 _KIND = "codex-canonical-jsonl"
+_EVENT_KIND = "codex-canonical-event-jsonl"
+_MAX_EVENT_TAIL = 16 * 1024 * 1024
+_MAX_EVENT_OFFSET = (1 << 63) - 1
+_EVENT_CHUNK = 64 * 1024
 
 
 def _check_time(deadline):
@@ -259,6 +264,203 @@ def _header(data, identity, profile, deadline):
     return hashlib.sha256(first).hexdigest(), record["ordinal"]
 
 
+def _pread_exact(descriptor, start, length, deadline):
+    blocks = []
+    while length:
+        _check_time(deadline)
+        block = os.pread(descriptor, min(length, _EVENT_CHUNK), start)
+        if not block:
+            raise NativeError("Native context event window was truncated")
+        blocks.append(block)
+        start += len(block)
+        length -= len(block)
+    _check_time(deadline)
+    return b"".join(blocks)
+
+
+def _seal_window(windows, start, data):
+    windows.append((start, len(data), hashlib.sha256(data).hexdigest()))
+
+
+@contextmanager
+def _event_source(path, deadline):
+    """Seal only the read windows, allowing unrelated later appends.
+
+    Neither file metadata nor these windows certify unread historical bytes.
+    The tail limit bounds scan extent; rechecking seals adds bounded I/O.
+    """
+    _check_time(deadline)
+    initial = path.lstat()
+    if (not stat.S_ISREG(initial.st_mode) or initial.st_uid != os.getuid()
+            or initial.st_mode & 0o022 or not 0 <= initial.st_size <= _MAX_EVENT_OFFSET):
+        raise NativeError("Native context event file ownership, mode, or size is unsupported")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        opened = os.fstat(descriptor)
+        if ((opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino)
+                or not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.getuid()
+                or opened.st_mode & 0o022 or not 0 <= opened.st_size <= _MAX_EVENT_OFFSET):
+            raise NativeError("Native context event file changed while opening")
+        windows = []
+        yield descriptor, opened, windows
+        for start, length, expected in windows:
+            digest = hashlib.sha256()
+            while length:
+                block = _pread_exact(descriptor, start, min(length, _EVENT_CHUNK), deadline)
+                digest.update(block)
+                start += len(block)
+                length -= len(block)
+            if digest.hexdigest() != expected:
+                raise NativeError("Native context event header, anchor, or receipt window changed")
+        current, final = path.lstat(), os.fstat(descriptor)
+        if ((current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+                or not stat.S_ISREG(current.st_mode) or current.st_uid != os.getuid()
+                or current.st_mode & 0o022 or final.st_size < opened.st_size):
+            raise NativeError("Native context event source was replaced or truncated")
+        _check_time(deadline)
+    finally:
+        os.close(descriptor)
+
+
+def _event_header(descriptor, size, deadline):
+    blocks, start = [], 0
+    limit = min(size, _MAX_LINE + 1)
+    while start < limit:
+        block = _pread_exact(descriptor, start, min(4096, limit - start), deadline)
+        newline = block.find(b"\n")
+        if newline >= 0:
+            blocks.append(block[:newline + 1])
+            return b"".join(blocks)
+        blocks.append(block)
+        start += len(block)
+    raise NativeError("Native context event header is incomplete or exceeds its line limit")
+
+
+def _event_anchor(descriptor, size, deadline):
+    blocks, position, remaining = [], size, _MAX_LINE + 2
+    while position and remaining:
+        length = min(position, remaining, _EVENT_CHUNK)
+        start = position - length
+        block = _pread_exact(descriptor, start, length, deadline)
+        if position == size and not block.endswith(b"\n"):
+            raise NativeError("Native context event capture reached an incomplete record")
+        end = len(block) - 1 if position == size else len(block)
+        newline = block.rfind(b"\n", 0, end)
+        if newline >= 0:
+            blocks.append(block[newline + 1:])
+            return start + newline + 1, b"".join(reversed(blocks))
+        blocks.append(block)
+        position, remaining = start, remaining - length
+        if not position:
+            return 0, b"".join(reversed(blocks))
+    raise NativeError("Native context event anchor exceeds the supported line limit")
+
+
+def _prepare_event_receipt(captured, profile, path, deadline):
+    with _event_source(path, deadline) as (descriptor, facts, windows):
+        first = _event_header(descriptor, facts.st_size, deadline)
+        header, ordinal_base = _header(first, captured.identity, profile, deadline)
+        anchor_start, anchor = _event_anchor(descriptor, facts.st_size, deadline)
+        record = _decode(anchor[:-1], deadline)
+        ordinal = record.get("ordinal")
+        if type(ordinal) is not int or ordinal < ordinal_base:
+            raise NativeError("Native context event anchor has an invalid ordinal")
+        _seal_window(windows, 0, first)
+        _seal_window(windows, anchor_start, anchor)
+        if anchor_start:
+            _seal_window(windows, anchor_start - 1, b"\n")
+        return {"schema": 2, "kind": _EVENT_KIND, "actor": captured.identity.actor,
+                "session_id": captured.identity.session_id, "turn_key": captured.turn_key,
+                "tool_id": captured.tool_id, "path": str(path), "device": facts.st_dev,
+                "inode": facts.st_ino, "offset": facts.st_size, "header_sha256": header,
+                "ordinal_base": ordinal_base, "anchor_start": anchor_start,
+                "anchor_sha256": hashlib.sha256(anchor).hexdigest(), "anchor_ordinal": ordinal,
+                "profile": profile}
+
+
+def _event_lines(descriptor, start, end, deadline):
+    buffer, position, record_start = bytearray(), start, start
+    while position < end:
+        block = _pread_exact(descriptor, position, min(end - position, _EVENT_CHUNK), deadline)
+        position += len(block)
+        buffer.extend(block)
+        while True:
+            newline = buffer.find(b"\n")
+            if newline < 0:
+                if len(buffer) > _MAX_LINE:
+                    raise NativeError("Native context line exceeds the supported limit")
+                break
+            if newline > _MAX_LINE:
+                raise NativeError("Native context line exceeds the supported limit")
+            raw = bytes(buffer[:newline + 1])
+            del buffer[:newline + 1]
+            yield record_start, raw
+            record_start += len(raw)
+
+
+def _verify_event_receipt(identity, request, profile, text, token, deadline):
+    if profile["sha256"] != _STRUCTURAL_CREATION_HEADER_SHA256:
+        raise NativeError("Unsupported native Codex event receipt writer")
+    offset, start = request["offset"], request["anchor_start"]
+    ordinal_base, anchor_ordinal = request["ordinal_base"], request["anchor_ordinal"]
+    if (type(offset) is not int or not 1 <= offset <= _MAX_EVENT_OFFSET
+            or type(start) is not int or not 0 <= start < offset
+            or offset - start > _MAX_LINE + 1
+            or type(ordinal_base) is not int or ordinal_base < 0
+            or type(anchor_ordinal) is not int or anchor_ordinal < ordinal_base):
+        raise NativeError("Invalid native context event boundary")
+    path = _path(identity, request["path"])
+    with _event_source(path, deadline) as (descriptor, facts, windows):
+        if (facts.st_dev, facts.st_ino) != (request["device"], request["inode"]) or facts.st_size < offset:
+            raise NativeError("Native context event source was replaced or truncated")
+        first = _event_header(descriptor, facts.st_size, deadline)
+        header, base = _header(first, identity, profile, deadline)
+        if header != request["header_sha256"] or base != ordinal_base:
+            raise NativeError("Native context event recipient header changed")
+        if ((start == 0 and offset != len(first)) or 0 < start < len(first)
+                or start and _pread_exact(descriptor, start - 1, 1, deadline) != b"\n"):
+            raise NativeError("Native context event anchor is not a complete record boundary")
+        anchor = _pread_exact(descriptor, start, offset - start, deadline)
+        if not anchor.endswith(b"\n") or hashlib.sha256(anchor).hexdigest() != request["anchor_sha256"]:
+            raise NativeError("Native context event anchor changed")
+        record = _decode(anchor[:-1], deadline)
+        if type(record.get("ordinal")) is not int or record["ordinal"] != anchor_ordinal:
+            raise NativeError("Native context event anchor ordinal changed")
+        _seal_window(windows, 0, first)
+        _seal_window(windows, start, anchor)
+        if start:
+            _seal_window(windows, start - 1, b"\n")
+        ordinal, digest = anchor_ordinal + 1, hashlib.sha256()
+        scan_end = min(facts.st_size, offset + _MAX_EVENT_TAIL)
+        for position, raw in _event_lines(descriptor, offset, scan_end, deadline):
+            record = _decode(raw[:-1], deadline)
+            if type(record.get("ordinal")) is not int or record["ordinal"] != ordinal:
+                raise NativeError("Native context event ordinal is missing or discontinuous")
+            digest.update(raw)
+            payload = record.get("payload", {})
+            metadata = payload.get("internal_chat_message_metadata_passthrough", {}) if isinstance(payload, dict) else None
+            if (record.get("type") == "response_item" and isinstance(payload, dict)
+                    and payload.get("type") == "message" and payload.get("role") == "developer"
+                    and payload.get("content") == [{"type": "input_text", "text": text}]
+                    and isinstance(metadata, dict) and metadata.get("turn_id") == request["turn_key"][6:]
+                    and metadata.get("content_item_kinds") == ["hooks.additional_context"]
+                    and _hook_provenance(metadata.get("content_item_metadata"))
+                    and isinstance(payload.get("id"), str) and 0 < len(payload["id"]) <= 256):
+                end = position + len(raw)
+                windows.append((offset, end - offset, digest.hexdigest()))
+                _check_time(deadline)
+                return {"status": "accepted", "evidence": {
+                    "source": _EVENT_KIND, "actor": identity.actor,
+                    "session_id": identity.session_id, "turn_key": request["turn_key"],
+                    "tool_id": request["tool_id"], "token": token,
+                    "message_id": payload["id"], "ordinal": ordinal,
+                    "byte_start": position, "byte_end": end, "profile": profile}}
+            ordinal += 1
+        if scan_end < facts.st_size:
+            raise NativeError("Native context event tail exceeds the bounded scan limit")
+        return {"status": "unknown", "reason": "Exact native hook context has not been recorded"}
+
+
 def inspect_context_history(identity, profile, transcript_path, *, timeout=0.5):
     """Inspect exact file/header compatibility; do not certify an emitted receipt."""
     observed = {}
@@ -269,7 +471,12 @@ def inspect_context_history(identity, profile, transcript_path, *, timeout=0.5):
         deadline = time.monotonic() + timeout
         profile = _profile(profile)
         path = _path(identity, transcript_path)
-        data, facts = _snapshot(path, deadline)
+        if profile["sha256"] == _STRUCTURAL_CREATION_HEADER_SHA256:
+            with _event_source(path, deadline) as (descriptor, facts, windows):
+                data = _event_header(descriptor, facts.st_size, deadline)
+                _seal_window(windows, 0, data)
+        else:
+            data, facts = _snapshot(path, deadline)
         newline = data.find(b"\n")
         if newline < 0:
             raise NativeError("Native context header is incomplete")
@@ -304,6 +511,8 @@ def prepare_context_receipt(captured: HookEvent) -> dict:
         deadline = time.monotonic() + _CAPTURE_TIMEOUT
         profile = _profile(_owner_profile(deadline))
         path = _path(captured.identity, captured.transcript_path)
+        if profile["sha256"] == _STRUCTURAL_CREATION_HEADER_SHA256:
+            return _prepare_event_receipt(captured, profile, path, deadline)
         data, facts = _snapshot(path, deadline)
         header, ordinal_base = _header(data, captured.identity, profile, deadline)
         if not data.endswith(b"\n"):
@@ -337,7 +546,9 @@ def verify_context_receipt(identity: NativeIdentity, attempt: dict, *, timeout=0
         if not isinstance(identity, NativeIdentity) or identity.provider != "codex":
             raise NativeError("Native context recipient must be Codex")
         request = attempt["receipt_request"]
-        if not isinstance(request, dict) or request.get("schema") != 1 or request.get("kind") != _KIND:
+        event = (isinstance(request, dict) and type(request.get("schema")) is int
+                 and request["schema"] == 2 and request.get("kind") == _EVENT_KIND)
+        if not event and (not isinstance(request, dict) or request.get("schema") != 1 or request.get("kind") != _KIND):
             raise NativeError("Unsupported native context receipt request")
         if (request["actor"] != identity.actor or request["session_id"] != identity.session_id
                 or attempt["actor"] != identity.actor
@@ -349,6 +560,8 @@ def verify_context_receipt(identity: NativeIdentity, attempt: dict, *, timeout=0
         token = attempt["token"]
         if parse_wake(text) != token:
             raise NativeError("Native context does not match its exact notification token")
+        if event:
+            return _verify_event_receipt(identity, request, profile, text, token, deadline)
         offset = request["offset"]
         if type(offset) is not int or offset < 1 or offset > _MAX_FILE:
             raise NativeError("Invalid native context lower bound")
