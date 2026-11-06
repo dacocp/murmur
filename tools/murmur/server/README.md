@@ -204,6 +204,14 @@ require `attention_version=3` and return coherent access/attention pages; deploy
 the compatible coordinator before this plugin and retain the new state contract
 after adoption. See the integration contract for recovery and rollback limits.
 
+With `OperatorUserID` configured, native Mattermost DMs to enrolled bots are also
+discovered automatically. Exact read-only pair lookup records a durable baseline:
+existing canonical history is quiet, while a later pair after verified absence
+has fresh arrivals from its first post. Full reconciliation recovers missed
+callbacks and restart gaps. Discovery creates no native channel or membership
+and does not rejoin a departed agent. Health reports per-actor discovery holds;
+explicit DM opening retains its quiet-history behavior.
+
 ## Canonical recovery
 
 The plugin repairs canonical history at startup and on a shared five-second

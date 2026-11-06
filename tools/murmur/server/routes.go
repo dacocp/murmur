@@ -76,6 +76,9 @@ func (p *Plugin) route(parts []string, r *http.Request) (any, error) {
 				}
 				result["enrollment_seq"] = boundary.Sequence
 			}
+			if warning := p.operatorDMErrors[req.Actor]; warning != "" {
+				result["operator_dm_discovery_error"] = warning
+			}
 			return result, nil
 		}
 	case "agents":

@@ -434,6 +434,9 @@ func (p *Plugin) registerMode(actor, name, parent string, edges []LineageEdge, m
 			a.Name, a.Username = previousName, previousUsername
 			return nil, err
 		}
+		if err := p.prepareRegisteredOperatorDM(actor); err != nil {
+			return nil, err
+		}
 		return a, nil
 	}
 	if err := p.ensureTeam(); err != nil {
@@ -455,6 +458,9 @@ func (p *Plugin) registerMode(actor, name, parent string, edges []LineageEdge, m
 	p.publishLineage(graph)
 	delete(p.state.Registrations, actor)
 	if err := p.save(); err != nil {
+		return nil, err
+	}
+	if err := p.prepareRegisteredOperatorDM(actor); err != nil {
 		return nil, err
 	}
 	return a, nil

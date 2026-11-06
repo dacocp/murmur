@@ -69,7 +69,13 @@ func (p *Plugin) drainPostHints() {
 	posts := []*model.Post{}
 	for _, hint := range unique {
 		if p.state.Conversations[hint.ChannelID] == nil {
-			continue
+			p.discoverHintedOperatorDM(hint.ChannelID)
+			if p.fault != "" {
+				return
+			}
+			if p.state.Conversations[hint.ChannelID] == nil {
+				continue
+			}
 		}
 		post, err := p.API.GetPost(hint.ID)
 		if err != nil || post == nil || post.Id != hint.ID || post.ChannelId != hint.ChannelID || !userPost(post) {

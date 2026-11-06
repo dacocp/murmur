@@ -18,7 +18,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from murmur.backend import Backend, BackendError
 from murmur.coordinator import Coordinator
-from murmur.ledger import Ledger
+from murmur.ledger import Ledger, LedgerError
 from murmur.native import NativeIdentity
 from server.fixture import fixture_arguments, load_fixture
 from server.operator_integration_test import Server
@@ -107,19 +107,33 @@ def run(fixture):
             try:
                 runtime.mutate(child.key, 'post', channel_id=dm, message='Forbidden inherited write')
                 raise AssertionError('Observer must not post')
-            except BackendError as error:
-                assert error.status == 403
+            except LedgerError as error:
+                assert 'full participation' in str(error)
             own = runtime.mutate(child.key, 'operator_dm')['conversation']['id']
             assert own != dm
 
-            # Existing native human history is quietly adopted, not re-announced.
+            # A human may start a native DM before any Murmur open command.
+            # The configured watch proved this pair absent, so its first post is
+            # fresh; a later explicit open must reuse it without rebasing mail.
             native_pair = server.native('/channels/direct', [server.user_id, ledger.actor(b.key)['user_id']], expected=201)
-            old = server.native('/posts', {'channel_id': native_pair['id'], 'message': 'Before Murmur adoption'}, expected=201)
+            first_human = server.native('/posts', {'channel_id': native_pair['id'],
+                'message': 'Human starts a native DM before any Murmur open'}, expected=201)
+            deadline = time.monotonic() + 15
+            while True:
+                runtime.sync(b.key)
+                first_receipt = next((p for p in ledger.unread_posts(b.key) if p['id'] == first_human['id']), None)
+                if first_receipt is not None:
+                    break
+                assert time.monotonic() < deadline, 'First native human DM did not reach the ordinary recipient feed'
+                time.sleep(0.1)
+            assert first_receipt['notification_eligible'] and first_receipt['announced_at'] is None
+            receipt_fields = ('first_seen_seq', 'notification_eligible', 'read_at', 'announced_at')
+            before_open = {key: first_receipt[key] for key in receipt_fields}
             adopted = runtime.mutate(b.key, 'operator_dm')['conversation']['id']
             assert adopted == native_pair['id']
             runtime.sync(b.key)
-            old_receipt = next(p for p in ledger.unread_posts(b.key) if p['id'] == old['id'])
-            assert not old_receipt['notification_eligible'] and old_receipt['announced_at'] is None
+            after_open = next(p for p in ledger.unread_posts(b.key) if p['id'] == first_human['id'])
+            assert {key: after_open[key] for key in receipt_fields} == before_open
 
             # Real simultaneous HTTP requests in both directions converge.
             operation_id = uid()
@@ -142,7 +156,8 @@ def run(fixture):
             assert backend.operation(d.key, operation_id)['result']['channel_id'] == concurrent
             return {'new_pair': dm, 'first_agent_post': first['id'], 'human_reply': answer['id'],
                     'human_native_unread': unread['msg_count'], 'child_pair': own,
-                    'quiet_adoption': adopted, 'concurrent_pair': concurrent,
+                    'native_first_post_pair': adopted, 'native_first_post': first_human['id'],
+                    'native_first_post_eligible': True, 'concurrent_pair': concurrent,
                     'initial_contact_disabled': not initial.get('operatoruserid'),
                     'native_sessions_started': 0}
         finally:

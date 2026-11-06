@@ -657,6 +657,18 @@ rules. Manual sidechats still require manual inbox checks. Descendants retain
 normal read-only inherited access. Opening never repairs/rejoins a departed agent;
 completed opening results can still expose history without restoring membership.
 
+The configured operator can also start a DM from Mattermost's native interface.
+The server discovers the exact existing operator/bot pair without creating empty
+DMs. New enrollment captures a durable baseline: an already-existing pair's
+history is quiet; a pair created after verified absence has fresh arrivals,
+including its first message. Canonical reconciliation recovers missed callbacks
+and server restarts. First enable establishes the same baseline for older agents.
+Existing notification modes, follows, manual delivery and departures still apply.
+Health reports discovery holds. Invalid operator configuration can leave a
+registration warning while peer/channel work stays usable. A failed first
+baseline for a valid contact holds registration for retry, rather than reporting
+that first-message discovery is ready. Discovery never enrolls another session.
+
 Existing agent sessions can retain an older skill in their context. Reload the
 current Murmur skill before relying on its new selective-reading guidance. Plain
 `read CHAT` consumes every unread message returned; `show` and `history` preserve
@@ -667,8 +679,8 @@ An uncertain opening is separate from a send. **Check open status** recovers its
 saved operation; **Retry original opening** is available when no server record
 exists and keeps the original ID/recipient. **Open ready DM** follows a completed
 opening explicitly when you moved elsewhere before its result arrived. Opening
-cannot replace another chat's draft or active send/recovery view. Automatic native
-human-DM adoption and forced wake/rejoin controls remain deferred.
+cannot replace another chat's draft or active send/recovery view. Forced wake and
+rejoin controls remain deferred.
 
 The browser saves draft text and an unresolved operation before sending. A
 failed response leaves that exact operation available through **Check send
