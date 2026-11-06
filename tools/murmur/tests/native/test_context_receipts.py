@@ -24,6 +24,20 @@ SHA_0166 = "58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea"
 SHA_ALPHA6 = "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44"
 
 
+def stored_schema1_capture(captured, profile):
+    """Prior persisted capture shape, independent of the new default preparer."""
+    path = Path(captured.transcript_path).resolve()
+    data = path.read_bytes()
+    first = data.split(b"\n", 1)[0]
+    facts = path.stat()
+    return {"schema": 1, "kind": "codex-canonical-jsonl", "actor": captured.identity.actor,
+            "session_id": captured.identity.session_id, "turn_key": captured.turn_key,
+            "tool_id": captured.tool_id, "path": str(path), "device": facts.st_dev,
+            "inode": facts.st_ino, "offset": len(data), "line_count": len(data.splitlines()),
+            "ordinal_base": json.loads(first)["ordinal"], "prefix_sha256": hashlib.sha256(data).hexdigest(),
+            "header_sha256": hashlib.sha256(first).hexdigest(), "profile": deepcopy(profile)}
+
+
 class ContextReceiptTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -77,8 +91,8 @@ class ContextReceiptTests(unittest.TestCase):
         with self.path.open("ab") as stream:
             stream.write(row if isinstance(row, bytes) else self.encode(row))
 
-    def attempt(self):
-        request = native.prepare_context_receipt(self.captured)
+    def attempt(self, request=None):
+        request = native.prepare_context_receipt(self.captured) if request is None else deepcopy(request)
         json.dumps(request)  # The coordinator must be able to persist the capture.
         return {"actor": self.identity.key, "token": self.token,
                 "expected_turn_key": self.captured.turn_key, "tool_id": self.tool_id,
@@ -204,7 +218,7 @@ class ContextReceiptTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("MURMUR_LARGE_HISTORY_TEST") == "1",
                          "opt-in 136 MiB native-shaped context history")
-    def test_alpha6_resumed_history_above_128_mib_captures_and_confirms_exact_appended_context(self):
+    def test_stored_alpha6_schema1_above_128_mib_still_confirms_its_original_full_prefix_proof(self):
         self.profile.update(version="0.166.0-alpha.6", sha256=SHA_ALPHA6)
         self.reset_stream(header={"cli_version": "0.164.0-alpha.11.1"}, ordinal_base=19066)
         for ordinal in range(19068, 19102):
@@ -217,7 +231,7 @@ class ContextReceiptTests(unittest.TestCase):
         with self.path.open("rb") as stream:
             baseline_hash = hashlib.file_digest(stream, "sha256").hexdigest()
         self.assertGreater(baseline_size, 128 * 1024 * 1024)
-        attempt = self.attempt()
+        attempt = self.attempt(stored_schema1_capture(self.captured, self.profile))
         request = attempt["receipt_request"]
         self.assertEqual((request["offset"], request["ordinal_base"], request["line_count"]),
                          (baseline_size, 19066, 25036))
@@ -474,7 +488,9 @@ class ContextReceiptTests(unittest.TestCase):
                 request = attempt["receipt_request"]
                 self.assertEqual(request["ordinal_base"], 8921)
                 self.assertEqual(request["profile"], self.profile)
-                self.assertEqual(request["prefix_sha256"], hashlib.sha256(baseline).hexdigest())
+                self.assertEqual((request["schema"], request["kind"]), (2, "codex-canonical-event-jsonl"))
+                self.assertEqual(request["offset"], len(baseline))
+                self.assertNotIn("prefix_sha256", request)
                 self.assertEqual(self.path.read_bytes(), baseline)
                 self.assert_unknown(self.verify(attempt))
                 row = self.context_row(ordinal=8923)

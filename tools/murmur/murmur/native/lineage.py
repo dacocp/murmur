@@ -17,6 +17,7 @@ import uuid
 from .types import IdentityError
 
 SUPPORTED_VERSION = "2.1.310"
+SUPPORTED_MAC_VERSIONS = (SUPPORTED_VERSION, "2.1.317")
 SUPPORTED_LINUX_VERSION = "2.1.311"
 MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024
 MAX_LINE_BYTES = 2 * 1024 * 1024
@@ -52,7 +53,7 @@ def process_key(process):
             or process.get("entrypoint") != "cli"):
         raise IdentityError("Claude CLI lineage unresolved: verified pinned process birth required")
     platform = process.get("platform", "darwin")
-    if platform == "darwin" and process.get("version") == SUPPORTED_VERSION:
+    if platform == "darwin" and process.get("version") in SUPPORTED_MAC_VERSIONS:
         if process.get("pid_domain", "darwin") != "darwin":
             raise IdentityError("Claude CLI Darwin lineage has a foreign PID domain")
         return process["pid"], process["proc_start"]

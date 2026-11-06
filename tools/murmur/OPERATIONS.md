@@ -163,10 +163,24 @@ Local authorization is distinct from a provisioned server account. Historical
 errors do not prove a current failure. Native ancestry coverage can be incomplete
 at a missing ancestor record; it does not imply a guessed root or enrollment.
 
-For unresolved native work, inspect the exact token/recipient/epoch/turn before using
-`operator retire`, `interrupt` or `resolve` with an explicit reason. An accepted
-queue write is not proof of admission or rejection. A delayed valid context
+For a strictly local snapshot, run `murmur doctor --notifications`. It opens the
+existing ledger read-only, without credentials, server access, native-history
+verification or migration. It returns the current session's oldest 20 outstanding
+attempts; use `--limit N` (1–100) or `--token TOKEN` for one own attempt, including
+a completed one. Another session's token is inaccessible.
+Admission, agent awareness, message reads and native completion appear separately.
+`last_progress` is a recorded lifecycle timestamp; a deduplicated historical
+observation is not a current heartbeat. Missing proof or age alone does not
+establish loss. This view neither reconciles nor acknowledges an attempt.
+
+For unresolved native work, inspect the exact token/recipient/epoch/turn.
+`operator retire` deliberately abandons an attempt; `interrupt` and `resolve`
+address recorded turn/provenance state. None supplies missing admission proof.
+Use these controls only for the operator's intended decision, with an explicit
+reason. An accepted queue write is not proof of admission or rejection. A delayed valid context
 receipt can settle its frozen attempt after completion without reopening a turn.
+Retirement cannot cancel native input already queued or emitted, and a late
+verified context receipt may still settle the retained evidence.
 
 An unresolved receipt no longer blocks notifications for later arrivals. Each
 possibly sent attempt reserves its exact post IDs; those posts remain readable

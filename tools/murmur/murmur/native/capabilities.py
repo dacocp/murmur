@@ -116,7 +116,7 @@ def route_capabilities(identity, verified_target=None, *, mode="native", transcr
                     verified_target, owner, transcript_path, timeout=deadline - time.monotonic())
             reason = "Certified owner profile; " + history["reason"]
             if history["status"] == "supported":
-                reason += "; full capture and admission remain separate checks"
+                reason += "; event capture and admission remain separate checks"
             busy = _status(history["status"], reason, owner=owner, profile_status="supported",
                            history=history, scope="invoking_recipient_owner_and_history_header")
     except (OSError, ValueError, RuntimeError) as error:

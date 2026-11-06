@@ -81,6 +81,29 @@ class LineageTests(unittest.TestCase):
         with self.assertRaisesRegex(IdentityError, "complete certified ancestry"):
             self.certify(self.c, known=[c["ancestors"][-1]])
 
+    def test_mac_317_keeps_typed_branch_and_known_resume_without_guessing_roots(self):
+        self.process["version"] = "2.1.317"
+        root = self.root()
+        branch = self.certify(self.b, self.branch(self.a, self.b), root["ancestors"])
+        self.assertEqual(branch["parent_session_id"], self.a)
+        self.assertTrue(all(item["version"] == "2.1.317" for item in branch["ancestors"]))
+        resumed = {**self.process, "pid": 4800, "proc_start": "later birth", "root_start_verified": False}
+        observation = lineage.observation(dict(hook_event_name="SessionStart", session_id=self.b,
+                                               source="resume"), resumed)
+        self.assertEqual(self.certify(self.b, [observation], branch["ancestors"], resumed)["ancestors"],
+                         branch["ancestors"])
+        with self.assertRaises(IdentityError):
+            self.certify(self.b, [observation], process=resumed)
+
+    def test_mac_317_does_not_qualify_other_versions_or_foreign_pid_domains(self):
+        for changed in ({"version": "2.1.318"}, {"version": "2.1.311"},
+                        {"version": "2.1.317", "pid_domain": "linux"},
+                        {"version": "2.1.317", "platform": "linux",
+                         "pid_domain": "linux:" + "a" * 32 + ":pid:[4026531836]"}):
+            with self.subTest(changed=changed), self.assertRaises(IdentityError):
+                lineage.observation(dict(hook_event_name="SessionStart", session_id=self.a,
+                                         source="startup"), {**self.process, **changed})
+
     def test_stale_family_root_in_child_transcript_never_replaces_immediate_parent(self):
         a = self.root()
         b = self.certify(self.b, self.branch(self.a, self.b), known=a["ancestors"])

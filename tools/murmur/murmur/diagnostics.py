@@ -11,6 +11,11 @@ from .native.capabilities import route_capabilities
 from .protocol import ATTENTION_VERSION
 
 
+_RETIREMENT_EFFECT = (
+    "Operator retirement deliberately abandons a pending attempt; it does not repair proof, replay its batch, "
+    "read messages or cancel already queued/emitted native input. Later verified context can still settle.")
+
+
 def ancestry_fields(identity):
     """Keep verified ancestry separate from current target/delivery support."""
     value = identity_dict(identity)
@@ -70,6 +75,102 @@ def enrollment_fields(ledger, record):
     else:
         result["parent"] = None
     return result
+
+
+def notification_attempt(actor, row, now):
+    """Present recorded facts; neither age nor a missing receipt establishes loss."""
+    item = {key: row[key] for key in (
+        "token", "mode", "status", "transport", "epoch", "turn_key", "expected_turn_key", "tool_id",
+        "created_at", "emitted_at", "admitted_at", "completed_at", "agent_seen_at", "reason")}
+    item["verification_present"] = bool(row["verification_present"])
+    item["receipt_blocks_new_notifications"] = False
+    item["age_ms"] = max(0, now - row["created_at"])
+    recovery = json.loads(row["idle_recovery_json"]) if row["idle_recovery_json"] else {}
+    if not isinstance(recovery, dict):
+        recovery = {}
+    if actor.startswith("codex:") and row["mode"] == "idle":
+        item["restart_qualified"] = row["handoff_kind"] == "codex-idle-handoff-v1"
+        item["restart_qualification_scope"] = "recorded_handoff"
+        item["current_recovery_verification"] = "not_checked"
+        if recovery:
+            item["idle_recovery"] = {}
+            for key in ("status", "detail", "queue_id", "action_id"):
+                if isinstance(recovery.get(key), str):
+                    item["idle_recovery"][key] = recovery[key][:1000]
+            for key in ("claimed_at", "finished_at", "lease_until"):
+                if type(recovery.get(key)) is int:
+                    item["idle_recovery"][key] = recovery[key]
+    progress = [(row[key], event) for key, event in (
+        ("created_at", "attempt_created"), ("emitted_at", "handoff_recorded"),
+        ("admitted_at", "native_admission"), ("agent_seen_at", "agent_awareness"),
+        ("completed_at", "native_completion"), ("last_read_at", "message_read")) if row[key] is not None]
+    for key, event in (("claimed_at", "wake_only_claim"), ("finished_at", "wake_only_result")):
+        if type(recovery.get(key)) is int:
+            progress.append((recovery[key], event))
+    stages = ("attempt_created", "handoff_recorded", "wake_only_claim", "wake_only_result",
+              "native_admission", "agent_awareness", "message_read", "native_completion")
+    at, event = max(progress, key=lambda entry: (entry[0], stages.index(entry[1])))
+    item["last_progress"] = {"event": event, "recorded_at": at, "age_ms": max(0, now - at)}
+    observation = row.get("observation")
+    item["last_observation"] = ({"source": observation["surface"], "recorded_at": observation["created_at"],
+                                 "reason": observation["reason"], "historical": True} if observation else None)
+    if row["admitted_at"] is not None:
+        explanation = {"source": "native_admission", "reason": "Native admission is recorded",
+                       "recorded_at": row["admitted_at"]}
+    elif item["reason"]:
+        explanation = {"source": "attempt", "reason": item["reason"], "recorded_at": None}
+    elif observation:
+        explanation = dict(item["last_observation"])
+    elif isinstance(row.get("transport_detail"), str) and row["transport_detail"]:
+        explanation = {"source": "transport", "reason": row["transport_detail"], "recorded_at": None}
+    else:
+        explanation = {"source": "recorded_state", "recorded_at": None,
+                       "reason": "Native admission is recorded" if row["admitted_at"] is not None else
+                                 "Native admission is not confirmed; the ledger does not establish why"}
+    item["explanation"] = explanation
+    item["native_admission"] = {"state": "confirmed" if row["admitted_at"] is not None else "unconfirmed",
+                                 "recorded_at": row["admitted_at"]}
+    item["agent_awareness"] = {"state": "acknowledged" if row["agent_seen_at"] is not None else "not_recorded",
+                               "recorded_at": row["agent_seen_at"]}
+    item["messages"] = {key: row[column] for key, column in (
+        ("batch_count", "batch_post_count"), ("tracked_count", "tracked_post_count"),
+        ("read_count", "read_post_count"), ("unread_count", "unread_post_count"),
+        ("unavailable_count", "unavailable_post_count"))}
+    item["completion"] = {"state": row["status"] if row["status"] in ("completed", "interrupted") else "not_recorded",
+                           "recorded_at": row["completed_at"], "enclosing_turn_status": row["enclosing_turn_status"]}
+    item["reservation"] = {"scope": "none" if row["transport"] == "rejected" else "frozen_batch_only",
+                            "post_count": 0 if row["transport"] == "rejected" else row["batch_post_count"]}
+    item["commands"] = {"check_inbox": "murmur inbox"}
+    if row["agent_seen_at"] is None:
+        item["commands"]["seen_if_received"] = "murmur seen " + row["token"]
+    if row["status"] == "pending":
+        item["operator_retirement_effect"] = _RETIREMENT_EFFECT
+        item["commands"]["operator_retire_if_deliberate"] = (
+            "murmur operator retire " + actor + " --token " + row["token"] + " --reason 'EXPLICIT OPERATOR REASON'")
+    return item
+
+
+def notification_report(ledger, identity, *, token=None, limit=20):
+    """A local snapshot: no native target probes, credentials or message-body reads."""
+    actor, now = identity.key, ledger.clock()
+    account = ledger.actor(actor)
+    window = ledger.notification_diagnostics(actor, token=token, limit=limit)
+    return {"actor": actor, "inspection": "read_only", "checked_at": now,
+            "enrollment_mode": account["mode"], "delivery_configuration": "not_checked",
+            "identity": {"source": "current_native_context", "target_verification": "not_checked",
+                         "ancestry_verification": "not_checked"},
+            "scope": "exact_token" if token is not None else "outstanding_notifications",
+            "attempts": [notification_attempt(actor, row, now) for row in window["attempts"]],
+            "total": window["total"], "unconfirmed_native_count": window["unconfirmed_native_count"],
+            "truncated": window["truncated"], "limit": limit,
+            "guidance": [
+                "Each attempt reserves only its frozen batch; newer eligible arrivals can notify independently.",
+                "Admission, agent awareness, message reading and native completion are separate recorded facts.",
+                "Age or missing proof does not establish that a notification was lost or remains in flight.",
+                "inbox checks pending work and acknowledges outstanding notices after successful output; it does not read messages.",
+                "Use seen only if you received that exact doorbell. It records awareness, not native admission or reading.",
+                _RETIREMENT_EFFECT,
+                "Last progress uses recorded lifecycle/message/wake timestamps. Historical observations are deduplicated, not a last-check heartbeat."]}
 
 
 def report(coordinator, identity, settings):
@@ -142,22 +243,9 @@ def report(coordinator, identity, settings):
         ORDER BY max(created_at) DESC,surface,error LIMIT 10""", (actor,))]
     attempt_count = ledger.db.execute("SELECT count(*) FROM attempts WHERE actor=? AND status IN ('pending','admitted')",
                                       (actor,)).fetchone()[0]
-    attempts = [dict(row) for row in ledger.db.execute("""SELECT token,mode,status,transport,
-        epoch,turn_key,expected_turn_key,tool_id,created_at,emitted_at,admitted_at,
-        completed_at,agent_seen_at,substr(reason,1,1000) AS reason,
-        verification_json IS NOT NULL AS verification_present,
-        json_extract(emission_json,'$.kind') AS handoff_kind,
-        json_extract(evidence_json,'$.recovery') AS idle_recovery_json
-        FROM attempts WHERE actor=? AND status IN ('pending','admitted')
-        ORDER BY created_at DESC,token LIMIT 20""", (actor,))]
-    for attempt in attempts:
-        attempt["verification_present"] = bool(attempt["verification_present"])
-        attempt["receipt_blocks_new_notifications"] = False
-        kind, recovery = attempt.pop("handoff_kind"), attempt.pop("idle_recovery_json")
-        if identity.provider == "codex" and attempt["mode"] == "idle":
-            attempt["restart_qualified"] = kind == "codex-idle-handoff-v1"
-            if recovery is not None:
-                attempt["idle_recovery"] = json.loads(recovery)
+    window = ledger.notification_diagnostics(actor, limit=20, active_only=True, newest_first=True) if record else {"attempts": []}
+    now = ledger.clock()
+    attempts = [notification_attempt(actor, row, now) for row in window["attempts"]]
     admitted = ledger.db.execute("""SELECT token,mode,status,transport,epoch,turn_key,
         admitted_at,completed_at FROM attempts WHERE actor=? AND admitted_at IS NOT NULL
         ORDER BY admitted_at DESC,token LIMIT 1""", (actor,)).fetchone()

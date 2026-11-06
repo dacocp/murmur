@@ -67,15 +67,19 @@ class ClaudeTests(unittest.TestCase):
         return path
 
     @contextmanager
-    def cli(self, argv=None):
-        executable = self.home / ".local/bin/claude"
+    def cli(self, argv=None, *, version="2.1.310", managed=False):
+        content = b"fake pinned executable"
+        digest = hashlib.sha256(content).hexdigest()
+        executable = (self.home / ".local/share/murmur/native-cli/claude" / digest / "package/claude"
+                      if managed else self.home / ".local/bin/claude")
         executable.parent.mkdir(parents=True, exist_ok=True)
-        executable.write_bytes(b"fake pinned executable")
+        executable.write_bytes(content)
         original = self.record.copy()
-        self.write_record(hostSessionId=None, entrypoint="cli", kind="interactive", version="2.1.310")
+        self.write_record(hostSessionId=None, entrypoint="cli", kind="interactive", version=version)
+        constant = "MAC_CLI_317_SHA256" if version == "2.1.317" else "CLI_SHA256"
         try:
             with patch.object(process, "inspect", return_value=(str(executable), tuple(argv or (str(executable),)))), \
-                    patch.object(claude, "CLI_SHA256", hashlib.sha256(executable.read_bytes()).hexdigest()):
+                    patch.object(claude, constant, digest):
                 yield executable
         finally:
             self.record = original
@@ -247,6 +251,90 @@ class ClaudeTests(unittest.TestCase):
                      ("claude", "--session-id", self.engine), ("claude", "a prompt")):
             with self.subTest(args=args), self.cli(args), self.assertRaises(IdentityError):
                 self.current()
+
+    def test_mac_317_measured_creation_precedes_registry_and_keeps_verified_version(self):
+        with self.cli(version="2.1.317", managed=True):
+            self.registry.unlink()
+            observed = claude.capture_creation(dict(hook_event_name="SessionStart", session_id=self.engine,
+                                                   source="startup"), self.env)
+            self.assertEqual(observed["process"]["version"], "2.1.317")
+            self.write_record()
+            identity = claude.resolve_identity(self.current(), lineage_proof={"observations": [observed]})
+            self.assertEqual(identity.target["version"], "2.1.317")
+            self.assertEqual(identity.evidence["parent_proof"]["ancestors"][0]["version"], "2.1.317")
+            self.assertIsNone(identity.parent_session_id)
+            self.assertEqual(claude.verify_target(identity).target, identity.target)
+
+    def test_default_cli_profile_keeps_legacy_platform_contract_without_selecting_mac_317(self):
+        for platform, expected in (("darwin", (claude.CLI_VERSION, claude.CLI_SHA256)),
+                                   ("linux", (claude.LINUX_CLI_VERSION, claude.LINUX_CLI_SHA256))):
+            with self.subTest(platform=platform), patch.object(claude, "_platform", return_value=platform):
+                self.assertEqual(claude._cli_profile(), expected)
+                self.assertEqual(claude._cli_profile(None), expected)
+                if platform == "darwin":
+                    self.assertEqual(claude._cli_profile(claude.MAC_CLI_317_SHA256),
+                                     (claude.MAC_CLI_317_VERSION, claude.MAC_CLI_317_SHA256))
+                else:
+                    with self.assertRaisesRegex(IdentityError, "unsupported"):
+                        claude._cli_profile(claude.MAC_CLI_317_SHA256)
+
+    def test_managed_mac_profiles_and_legacy_install_bind_registry_to_measured_hash(self):
+        for version in ("2.1.310", "2.1.317"):
+            for managed in (False, True):
+                with self.subTest(version=version, managed=managed), self.cli(version=version, managed=managed):
+                    identity = self.current()
+                    self.assertEqual(identity.target["version"], version)
+                    self.assertEqual(claude.verify_target(identity).target["version"], version)
+                    wrong = "2.1.310" if version == "2.1.317" else "2.1.317"
+                    self.write_record(version=wrong)
+                    with self.assertRaisesRegex(IdentityError, "unsupported"):
+                        self.current()
+                    with self.assertRaisesRegex(IdentityError, "registry binding changed"):
+                        claude.verify_target(identity)
+
+    def test_managed_mac_317_rejects_wrong_hash_cache_address_or_platform(self):
+        with self.cli(version="2.1.317", managed=True) as executable:
+            payload = dict(hook_event_name="SessionStart", session_id=self.engine, source="startup")
+            content = executable.read_bytes()
+            executable.write_bytes(content + b" changed")
+            with self.assertRaisesRegex(IdentityError, "unsupported"):
+                claude.capture_creation(payload, self.env)
+            executable.write_bytes(content)
+            for path in (self.home / "arbitrary/claude",
+                         self.home / ".local/share/murmur/native-cli/claude" / ("0" * 64) / "package/claude",
+                         self.home / ".local/share/claude/versions/2.1.310"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                with self.subTest(path=path), patch.object(process, "inspect", return_value=(str(path), (str(path),))):
+                    with self.assertRaisesRegex(IdentityError, "native installation"):
+                        claude.capture_creation(payload, self.env)
+            with patch.object(claude, "_platform", return_value="linux"), \
+                    patch.object(process, "pid_domain", return_value="linux:" + "a" * 32 + ":pid:[4026531836]"):
+                with self.assertRaisesRegex(IdentityError, "unsupported"):
+                    claude._cli_facts(self.engine, 2300, self.env)
+
+    def test_mac_317_cold_resume_and_idle_recovery_keep_exact_profile(self):
+        with self.cli(version="2.1.317", managed=True):
+            observed = claude.capture_creation(dict(hook_event_name="SessionStart", session_id=self.engine,
+                                                   source="startup"), self.env)
+            identity = claude.resolve_identity(self.current(), lineage_proof={"observations": [observed]})
+            with self.idle_replacement(identity=identity) as (_, record, path):
+                prepared = claude.prepare_idle_target(identity)
+                self.assertEqual(prepared.target["version"], "2.1.317")
+                self.assertEqual(prepared.target["pid"], 2500)
+                self.assertIs(prepared.evidence, identity.evidence)
+                path.write_text(json.dumps({**record, "version": "2.1.310"}))
+                with self.assertRaisesRegex(IdentityError, "registry binding changed"):
+                    claude.prepare_idle_target(identity)
+            proof = identity.evidence["parent_proof"]
+        self.birth = "later PID birth"
+        self.processes[2300] = (2200, self.uid, self.birth)
+        self.write_record(procStart=self.birth)
+        with self.cli(("claude", "--resume", self.engine), version="2.1.317", managed=True):
+            resumed = claude.resolve_identity(self.current(), lineage_proof=proof)
+            self.assertEqual(resumed.target["version"], "2.1.317")
+            self.assertNotEqual(resumed.epoch, identity.epoch)
+            self.assertEqual(resumed.evidence["parent_proof"]["ancestors"], proof["ancestors"])
 
     def test_known_cli_cold_resume_and_custom_config_use_recorded_home_not_config_parent(self):
         custom = self.home / "separate/config"

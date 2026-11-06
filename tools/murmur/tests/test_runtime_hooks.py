@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from murmur import hooks
 from murmur.coordinator import actor_key, identity_dict, routing_binding
 from murmur.ledger import Ledger
-from murmur.native import HookEvent, NativeIdentity
+from murmur.native import HookEvent, NativeError, NativeIdentity, parse_wake
 from murmur.native.lineage import observation
 
 
@@ -132,6 +132,71 @@ class RuntimeHookTests(unittest.TestCase):
         self.assertEqual(self.ledger.attempts(), [])
         self.assertIsNone(self.ledger.active_turn(self.actor))
         self.assertIsNone(self.ledger.unread_posts(self.actor)[0]["announced_at"])
+
+    def test_busy_watermark_is_complete_before_real_ledger_claim_mints_the_nonce(self):
+        self.handle("submit")
+        hooks.publish_control(self.ledger, True)
+        original_turn = self.ledger.active_turn(self.actor)
+        path = Path(self.home.name) / "synthetic-frontier.jsonl"
+        path.write_bytes(b'{"synthetic":"complete pre-notification frontier"}\n')
+        captured = HookEvent(self.identity, "post_tool", "PostToolUse", OLD_TURN,
+                             tool_id="tool-after-frontier", transcript_path=str(path))
+        request = {"schema": 2, "kind": "codex-canonical-event-jsonl", "offset": path.stat().st_size}
+        sequence = []
+        nonce = "post-capture-" + "n" * 20
+
+        def capture(event):
+            self.assertEqual(event, captured)
+            claim.assert_not_called()
+            mint.assert_not_called()
+            self.assertEqual(self.ledger.attempts(self.actor), [])
+            self.assertEqual(path.stat().st_size, request["offset"])
+            sequence.append("frontier captured")
+            return request
+
+        def mint_after_capture(size):
+            self.assertEqual(size, 24)
+            self.assertEqual(sequence, ["frontier captured"])
+            self.assertEqual(path.stat().st_size, request["offset"])
+            self.assertNotIn(nonce.encode(), path.read_bytes())
+            sequence.append("nonce minted")
+            return nonce
+
+        with patch("murmur.native.parse_hook", return_value=captured), \
+                patch("murmur.native.prepare_context_receipt", side_effect=capture), \
+                patch.object(self.ledger, "claim_context", wraps=self.ledger.claim_context) as claim, \
+                patch("murmur.ledger.secrets.token_urlsafe", side_effect=mint_after_capture) as mint:
+            result = hooks.handle(self.ledger, "codex", "PostToolUse", {})
+        self.assertEqual(sequence, ["frontier captured", "nonce minted"])
+        claim.assert_called_once()
+        mint.assert_called_once_with(24)
+        self.assertEqual(parse_wake(result["hookSpecificOutput"]["additionalContext"]), nonce)
+        attempt = self.ledger.attempt(nonce)
+        self.assertEqual((attempt["receipt_request"], attempt["post_ids"], attempt["status"]),
+                         (request, ["request"], "pending"))
+        self.assertEqual(self.ledger.active_turn(self.actor), original_turn)
+        self.assertIsNone(self.ledger.unread_posts(self.actor)[0]["announced_at"])
+
+    def test_failed_busy_watermark_never_claims_a_nonce_or_emits_context(self):
+        self.handle("submit")
+        hooks.publish_control(self.ledger, True)
+        original_turn = self.ledger.active_turn(self.actor)
+        original_receipts = self.ledger._unread(self.actor)
+        captured = HookEvent(self.identity, "post_tool", "PostToolUse", OLD_TURN,
+                             tool_id="incomplete-frontier", transcript_path="/synthetic/history.jsonl")
+        payload = {"ordinary_tool_result": "original output remains available"}
+        with patch("murmur.native.parse_hook", return_value=captured), \
+                patch("murmur.native.prepare_context_receipt", side_effect=NativeError("Incomplete boundary")), \
+                patch.object(self.ledger, "claim_context", wraps=self.ledger.claim_context) as claim, \
+                patch("murmur.ledger.secrets.token_urlsafe") as mint:
+            result = hooks.handle(self.ledger, "codex", "PostToolUse", payload)
+        self.assertEqual(result, {})
+        claim.assert_not_called()
+        mint.assert_not_called()
+        self.assertEqual(self.ledger.attempts(self.actor), [])
+        self.assertEqual(self.ledger._unread(self.actor), original_receipts)
+        self.assertEqual(self.ledger.active_turn(self.actor), original_turn)
+        self.assertEqual(payload, {"ordinary_tool_result": "original output remains available"})
 
     def test_native_client_evidence_updates_mid_turn_without_rewriting_frozen_work(self):
         old = identity_dict(self.identity)
