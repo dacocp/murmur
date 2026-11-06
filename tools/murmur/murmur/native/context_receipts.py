@@ -36,12 +36,13 @@ _PROFILES = {
     "58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea": "0.166.0-alpha.5.1",
     "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44": "0.166.0-alpha.6",
 }
-# The immutable header records creation, not the writer of a new hook context.
-# Resume compatibility is scoped to an exercised append-owner/header pair.
+# The qualified alpha6 writer checks the historical header's schema; its creator
+# label is diagnostic metadata, not the identity of the current append owner.
+_STRUCTURAL_CREATION_HEADER_SHA256 = "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44"
+# Earlier writer profiles retain their exercised append-owner/header pairs.
 _CREATION_HEADER_COMPATIBILITY = {
     "d84a54b031085f01e3ad915ea7c72ebea4dcf69e90f0d1e0e4a637e8280991d2": ("0.164.0-alpha.11.1",),
     "58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea": ("0.164.0-alpha.11.1",),
-    "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44": ("0.164.0-alpha.11.1",),
 }
 _LEGACY_PROVENANCE_PROFILES = frozenset({
     "1afb28c01d7d49e892bd75f11076b10f1451e34e0ee308a95e5ab7f69f9c84fe",
@@ -242,12 +243,17 @@ def _header(data, identity, profile, deadline):
     first = data[:newline]
     record = _decode(first, deadline)
     header = record.get("payload")
-    creation_versions = (profile["version"], *_CREATION_HEADER_COMPATIBILITY.get(profile["sha256"], ()))
+    creation = header.get("cli_version") if isinstance(header, dict) else None
+    if profile["sha256"] == _STRUCTURAL_CREATION_HEADER_SHA256:
+        creation_valid = (isinstance(creation, str) and 1 <= len(creation) <= 128
+                          and creation.strip() == creation and creation.isprintable())
+    else:
+        creation_valid = creation in (profile["version"], *_CREATION_HEADER_COMPATIBILITY.get(profile["sha256"], ()))
     if (type(record.get("ordinal")) is not int or record["ordinal"] < 0
             or record.get("type") != "session_meta" or not isinstance(header, dict)
             or header.get("id") != identity.session_id
             or header.get("session_id") != identity.session_id
-            or header.get("cli_version") not in creation_versions
+            or not creation_valid
             or header.get("history_mode") != "paginated"):
         raise NativeError("Native context header does not match its certified recipient/profile")
     return hashlib.sha256(first).hexdigest(), record["ordinal"]

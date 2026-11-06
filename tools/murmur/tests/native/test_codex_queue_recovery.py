@@ -133,7 +133,7 @@ class IdlePreparationTests(_StoreFixture):
     def test_creation_header_matches_exact_thread_without_requiring_current_version(self):
         result = recovery.prepare_idle_target(self.identity)
         self.assertEqual(result.session_id, SESSION)
-        for field, value in (('id', PARENT), ('session_id', PARENT), ('cli_version', 'unknown-version')):
+        for field, value in (('id', PARENT), ('session_id', PARENT), ('history_mode', 'unknown-mode')):
             old = self.header['payload'][field]
             self.header['payload'][field] = value
             self.write_header()
@@ -142,7 +142,7 @@ class IdlePreparationTests(_StoreFixture):
                     recovery.prepare_idle_target(self.identity)
             self.header['payload'][field] = old
 
-    def test_current_owner_creation_header_is_not_substituted_with_the_other_engine(self):
+    def test_header_creator_does_not_substitute_for_the_verified_append_owner(self):
         version = '0.166.0-alpha.6' if self.owner_sha == SHA_ALPHA6 else '0.166.0-alpha.5.1'
         self.header['payload']['cli_version'] = version
         self.write_header()
@@ -150,8 +150,15 @@ class IdlePreparationTests(_StoreFixture):
         self.header['payload']['cli_version'] = (
             '0.166.0-alpha.5.1' if self.owner_sha == SHA_ALPHA6 else '0.166.0-alpha.6')
         self.write_header()
-        with self.assertRaisesRegex(NativeError, 'certified recipient/profile'):
-            recovery.prepare_idle_target(self.identity)
+        if self.owner_sha == SHA_ALPHA6:
+            before = self.rollout.read_bytes()
+            result = recovery.prepare_idle_target(self.identity)
+            self.assertEqual(result.session_id, SESSION)
+            self.assertEqual(result.evidence['desktop_wake']['verification']['profile']['owner_sha256'], SHA_ALPHA6)
+            self.assertEqual(self.rollout.read_bytes(), before)
+        else:
+            with self.assertRaisesRegex(NativeError, 'certified recipient/profile'):
+                recovery.prepare_idle_target(self.identity)
 
     def test_state_proof_never_forges_rpc_source_for_legacy_identity(self):
         actor = replace(self.identity, evidence={'desktop_wake': deepcopy(self.descriptor)})
@@ -353,6 +360,45 @@ class RetainedQueueTests(_StoreFixture):
 
 class Alpha6IdlePreparationTests(IdlePreparationTests):
     owner_sha = SHA_ALPHA6
+
+    def test_reported_historical_header_prepares_exact_idle_recipient_without_rewriting_native_state(self):
+        for creator in ('0.162.0-alpha.2', '0.164.0', '0.166.0-alpha.6', 'unknown historical creator'):
+            self.header['payload']['cli_version'] = creator
+            self.header['ordinal'] = 8921
+            self.write_header()
+            original = deepcopy(self.identity)
+            before = self.database.read_bytes(), self.rollout.read_bytes()
+            with self.subTest(creator=creator):
+                result = recovery.prepare_idle_target(self.identity)
+                self.assertEqual((result.session_id, result.parent_session_id, result.target),
+                                 (original.session_id, original.parent_session_id, original.target))
+                self.assertEqual(result.evidence['codex_idle_thread']['source'], 'vscode')
+                self.assertEqual(result.evidence['desktop_wake']['verification']['profile']['owner_sha256'], SHA_ALPHA6)
+                self.assertEqual((self.database.read_bytes(), self.rollout.read_bytes()), before)
+                self.current.assert_not_called()
+                self.discover.assert_not_called()
+
+    def test_malformed_creator_and_noninteger_ordinal_cannot_prepare_idle_delivery(self):
+        baseline = deepcopy(self.header)
+        for creator in (None, '', ' ', ' old', 'old ', 'old\ncreator', 'old\x85creator',
+                        'old\ud800creator', 'x' * 129, True, 162, [], {}):
+            self.header = deepcopy(baseline)
+            self.header['payload']['cli_version'] = creator
+            self.write_header()
+            with self.subTest(creator=repr(creator)), self.assertRaises(NativeError):
+                recovery.prepare_idle_target(self.identity)
+        self.header = deepcopy(baseline)
+        self.header['payload'].pop('cli_version')
+        self.write_header()
+        with self.assertRaises(NativeError):
+            recovery.prepare_idle_target(self.identity)
+        for ordinal in (None, True, -1, '8921', 8921.0):
+            self.header = deepcopy(baseline)
+            self.header['payload']['cli_version'] = '0.162.0-alpha.2'
+            self.header['ordinal'] = ordinal
+            self.write_header()
+            with self.subTest(ordinal=ordinal), self.assertRaises(NativeError):
+                recovery.prepare_idle_target(self.identity)
 
 
 class Alpha6RetainedQueueTests(RetainedQueueTests):

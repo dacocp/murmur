@@ -169,9 +169,14 @@ an ended turn without requiring its former process to remain alive.
 `native/context_receipts.py` is certified to exact measured backend hashes for
 0.163.0-alpha.10.2, 0.164.0, 0.164.0-alpha.11.1, 0.165.0-alpha.1.2 and
 0.166.0-alpha.5.1 and 0.166.0-alpha.6. The immutable header records creation,
-independently of the current append owner. The exact measured 0.165 and 0.166
-hashes also accept alpha11-created histories; other cross-build pairs remain
-unsupported. Modern append profiles require strict harness-hook provenance;
+independently of the current append owner. The exact 0.166.0-alpha.6 hash accepts
+supported historical header structure, with creator version retained as printable
+metadata of 1–128 characters with no surrounding whitespace. Both recipient IDs,
+paginated mode and the starting ordinal remain mandatory. The creator label never
+certifies an executing engine. Earlier profiles retain their measured
+creation-version pairs. Native resume and append compatibility need their own
+actual admission evidence; idle preparation inspects only the header, while busy
+capture validates and freezes the full baseline. Modern append profiles require strict harness-hook provenance;
 only the exact legacy 0.163 profile retains its earlier
 provenance compatibility. Existing receipts retain their frozen append profile.
 The 256 MiB source bound, independent 8 MiB JSONL record budget, one-second
