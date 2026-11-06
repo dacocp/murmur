@@ -588,6 +588,11 @@ func (p *Plugin) reconcile() {
 			return
 		}
 	}
+	p.discoverNativeOperatorDMs()
+	if p.fault != "" {
+		p.lastErr = p.fault
+		return
+	}
 	changed := false
 	for id := range p.state.Conversations {
 		posts, err := p.canonical(id)

@@ -45,6 +45,8 @@ type Plugin struct {
 	workspaceUsers  []string
 	workspaceErrors map[string]string
 	fileActive      map[string]bool
+
+	operatorDMErrors map[string]string
 }
 
 func main() { plugin.ClientMain(&Plugin{}) }
@@ -52,7 +54,13 @@ func main() { plugin.ClientMain(&Plugin{}) }
 func (p *Plugin) OnConfigurationChange() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.loadConfiguration()
+	if err := p.loadConfiguration(); err != nil {
+		return err
+	}
+	if p.metadata != nil && p.fault == "" {
+		p.discoverNativeOperatorDMs()
+	}
+	return nil
 }
 
 func (p *Plugin) loadConfiguration() error {
@@ -181,6 +189,7 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 	}
 	if path == "/v1/health" && r.Method == http.MethodGet {
 		writeJSON(w, map[string]any{"version": version, "reconciliation_error": p.lastErr,
+			"operator_dm_discovery_errors": p.operatorDMErrors,
 			"capabilities": map[string]any{"attachments": p.attachmentCapability(), "managed_conversation_reads": p.managedReadCapability(),
 				"attention_boundaries": map[string]any{"version": 1}},
 			"build": map[string]any{"revision": buildRevision, "source_sha256": buildSourceHash,

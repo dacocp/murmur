@@ -179,7 +179,7 @@ func (p *Plugin) finishOperatorDM(o *Operation) error {
 	if o.Status == "complete" || o.Status == "failed" {
 		return nil
 	}
-	err := p.publishOperatorDM(o)
+	err := p.publishOperatorDM(o, true)
 	if err == nil || p.fault != "" {
 		return err
 	}
@@ -197,7 +197,9 @@ func (p *Plugin) finishOperatorDM(o *Operation) error {
 	return err
 }
 
-func (p *Plugin) publishOperatorDM(o *Operation) error {
+// Explicit opens adopt history quietly. Native discovery passes historical=false
+// only when its durable watch proved that this exact pair previously did not exist.
+func (p *Plugin) publishOperatorDM(o *Operation, historical bool) error {
 	if err := p.validateOperatorDM(o); err != nil {
 		return err
 	}
@@ -258,7 +260,7 @@ func (p *Plugin) publishOperatorDM(o *Operation) error {
 		p.state.Conversations[c.ID] = c
 		p.observe(baseline)
 		for _, post := range baseline {
-			if userPost(post) {
+			if historical && userPost(post) {
 				observation := p.state.Observed[post.Id]
 				observation.Historical = true
 				p.state.Observed[post.Id] = observation
