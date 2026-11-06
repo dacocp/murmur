@@ -597,13 +597,18 @@ Busy handoff and native acceptance remain separate. The coordinator confirms
 the exact appended harness context in the recipient's native history; agents
 need no acknowledgment command. This proves host acceptance, not that the model
 sampled or acted on it. The reader supports exact measured backend hashes for
-0.163.0-alpha.10.2, 0.164.0, 0.164.0-alpha.11.1 and 0.165.0-alpha.1.2, with a
-128 MiB file budget and an independent 8 MiB JSONL record budget. Capture has a
+0.163.0-alpha.10.2, 0.164.0, 0.164.0-alpha.11.1, 0.165.0-alpha.1.2,
+0.166.0-alpha.5.1 and 0.166.0-alpha.6, with a 256 MiB file budget and an
+independent 8 MiB JSONL record budget. Capture has a
 one-second deadline; verification retains its half-second deadline. Complete
 compaction records are validated along with other rows. The creation header
-does not describe the current writer: the measured 0.165 profile also supports
-histories created by 0.164.0-alpha.11.1. Other unmeasured cross-build pairs remain
-unsupported. Without a trusted exact
+does not describe the current writer. The exact 0.166.0-alpha.6 hash validates
+supported historical header structure and treats the creator version as bounded,
+nonempty printable metadata. It still requires both exact recipient IDs,
+paginated mode and a valid starting ordinal; current-writer certification,
+canonical path, frozen-prefix and modern provenance checks are unchanged.
+Earlier profiles retain their measured creation-version pairs. Header inspection
+alone does not prove native resume or whole-history compatibility. Without a trusted exact
 transcript path, `doctor` reports history compatibility as unverified even
 when the invoking owner profile is certified.
 Unsupported, changed or incomplete evidence stays visibly unconfirmed in

@@ -334,7 +334,8 @@ class ContextReceiptTests(unittest.TestCase):
                                        (SHA_0166, "0.166.0-alpha.5.1", "0.166.0-alpha.5.1"),
                                        (SHA_0166, "0.166.0-alpha.5.1", "0.164.0-alpha.11.1"),
                                        (SHA_ALPHA6, "0.166.0-alpha.6", "0.166.0-alpha.6"),
-                                       (SHA_ALPHA6, "0.166.0-alpha.6", "0.164.0-alpha.11.1")):
+                                       (SHA_ALPHA6, "0.166.0-alpha.6", "0.164.0-alpha.11.1"),
+                                       (SHA_ALPHA6, "0.166.0-alpha.6", "0.162.0-alpha.2")):
             self.profile.update(version=version, sha256=sha)
             for provenance in ("valid", None, {"type": "harness", "hook": False},
                                {"type": "harness", "hook": 1},
@@ -431,7 +432,7 @@ class ContextReceiptTests(unittest.TestCase):
         self.append(b'{"type":"event_msg"')
         self.assertEqual(self.verify(attempt), result)
 
-    def test_0166_creation_header_compatibility_does_not_infer_other_resume_pairs(self):
+    def test_older_append_owners_keep_their_creation_pair_and_exact_profile_guards(self):
         for sha, version, creation, supported in (
                 (SHA_0166, "0.166.0-alpha.5.1", "0.166.0-alpha.5.1", True),
                 (SHA_0166, "0.166.0-alpha.5.1", "0.164.0-alpha.11.1", True),
@@ -439,11 +440,6 @@ class ContextReceiptTests(unittest.TestCase):
                 (SHA_0166, "0.166.0-alpha.5.1", "0.163.0-alpha.10.2", False),
                 (SHA_0166, "0.166.0-alpha.5.1", "unmeasured-creation", False),
                 (SHA_0166, "0.165.0-alpha.1.2", "0.164.0-alpha.11.1", False),
-                (SHA_ALPHA6, "0.166.0-alpha.6", "0.166.0-alpha.6", True),
-                (SHA_ALPHA6, "0.166.0-alpha.6", "0.164.0-alpha.11.1", True),
-                (SHA_ALPHA6, "0.166.0-alpha.6", "0.166.0-alpha.5.1", False),
-                (SHA_ALPHA6, "0.166.0-alpha.6", "0.165.0-alpha.1.2", False),
-                (SHA_ALPHA6, "0.166.0-alpha.6", "unmeasured-creation", False),
                 (SHA_ALPHA6, "0.166.0-alpha.5.1", "0.164.0-alpha.11.1", False),
                 (SHA_0166, "0.166.0-alpha.5.1", "0.166.0-alpha.6", False),
                 (SHA_0165, "0.165.0-alpha.1.2", "0.166.0-alpha.5.1", False),
@@ -463,6 +459,90 @@ class ContextReceiptTests(unittest.TestCase):
                 self.assertEqual(result["evidence"]["profile"], self.profile)
                 self.assertEqual(result["evidence"]["message_id"], row["payload"]["id"])
                 self.assertEqual(result["evidence"]["byte_start"], attempt["receipt_request"]["offset"])
+
+    def test_alpha6_historical_creator_is_diagnostic_and_current_writer_proves_appended_receipt(self):
+        self.profile.update(version="0.166.0-alpha.6", sha256=SHA_ALPHA6)
+        # The reported old header had ordinal 8921. Identifiers and all content
+        # here are synthetic; no native session history is copied or rewritten.
+        for creator in ("0.162.0-alpha.2", "0.164.0", "0.164.0-alpha.11.1",
+                        "0.165.0-alpha.1.2", "0.166.0-alpha.5.1", "0.166.0-alpha.6",
+                        "unknown historical creator", "x" * 128, "é" * 128):
+            with self.subTest(creator=creator):
+                self.reset_stream(header={"cli_version": creator}, ordinal_base=8921)
+                baseline = self.path.read_bytes()
+                attempt = self.attempt()
+                request = attempt["receipt_request"]
+                self.assertEqual(request["ordinal_base"], 8921)
+                self.assertEqual(request["profile"], self.profile)
+                self.assertEqual(request["prefix_sha256"], hashlib.sha256(baseline).hexdigest())
+                self.assertEqual(self.path.read_bytes(), baseline)
+                self.assert_unknown(self.verify(attempt))
+                row = self.context_row(ordinal=8923)
+                self.append(row)
+                result = self.verify(attempt)
+                self.assertEqual(result["status"], "accepted", result)
+                evidence = result["evidence"]
+                self.assertEqual((evidence["ordinal"], evidence["byte_start"], evidence["message_id"]),
+                                 (8923, len(baseline), row["payload"]["id"]))
+                self.assertEqual(evidence["profile"], self.profile)
+                # A creator label neither authorizes a different writer nor
+                # changes an already frozen receipt when its owner disappears.
+                with patch.object(context_receipts, "_owner_profile", side_effect=NativeError("owner ended")):
+                    self.assertEqual(self.verify(attempt), result)
+                for field, value in (("expected_turn_key", "codex:" + str(uuid.uuid4())),
+                                     ("token", "another-token")):
+                    changed = deepcopy(attempt)
+                    changed[field] = value
+                    self.assert_unknown(self.verify(changed))
+
+    def test_alpha6_creator_metadata_rejects_missing_malformed_or_unbounded_values(self):
+        self.profile.update(version="0.166.0-alpha.6", sha256=SHA_ALPHA6)
+        for creator in (None, "", " ", " old", "old ", "old\ncreator", "old\x00creator",
+                        "old\x7fcreator", "old\x85creator", "old\ud800creator", "x" * 129,
+                        True, 162, [], {}):
+            with self.subTest(creator=repr(creator)):
+                self.reset_stream(header={"cli_version": creator}, ordinal_base=8921)
+                with self.assertRaises(NativeError):
+                    self.attempt()
+        self.reset_stream(ordinal_base=8921)
+        rows = [json.loads(line) for line in self.path.read_bytes().splitlines()]
+        rows[0]["payload"].pop("cli_version")
+        self.path.write_bytes(b"".join(self.encode(row) for row in rows))
+        with self.assertRaises(NativeError):
+            self.attempt()
+
+    def test_alpha6_historical_headers_do_not_relax_recipient_prefix_or_current_profile(self):
+        self.profile.update(version="0.166.0-alpha.6", sha256=SHA_ALPHA6)
+        for change in ({"id": str(uuid.uuid4())}, {"session_id": str(uuid.uuid4())},
+                       {"history_mode": "unrecognized"}):
+            self.reset_stream(header={"cli_version": "0.162.0-alpha.2", **change}, ordinal_base=8921)
+            with self.subTest(change=change), self.assertRaises(NativeError):
+                self.attempt()
+        for change in ("inode", "creator", "ordinal"):
+            self.reset_stream(header={"cli_version": "0.162.0-alpha.2"}, ordinal_base=8921)
+            attempt = self.attempt()
+            if change == "inode":
+                self.path.rename(self.path.with_suffix(".old"))
+                self.path.write_bytes(self.path.with_suffix(".old").read_bytes())
+            else:
+                rows = [json.loads(line) for line in self.path.read_bytes().splitlines()]
+                if change == "creator":
+                    rows[0]["payload"]["cli_version"] = "0.162.0-alpha.3"
+                else:
+                    rows[0]["ordinal"] = 8920
+                self.path.write_bytes(b"".join(self.encode(row) for row in rows))
+                self.assertEqual(self.path.stat().st_size, attempt["receipt_request"]["offset"])
+            self.path.chmod(0o600)
+            self.append(self.context_row(ordinal=8923))
+            with self.subTest(change=change):
+                self.assert_unknown(self.verify(attempt))
+        for sha, version in (("f" * 64, "0.166.0-alpha.6"),
+                             (SHA_ALPHA6, "0.166.0-alpha.5.1"),
+                             (SHA_0164, "0.164.0"), (SHA_0166, "0.166.0-alpha.5.1")):
+            self.profile.update(sha256=sha, version=version)
+            self.reset_stream(header={"cli_version": "0.162.0-alpha.2"}, ordinal_base=8921)
+            with self.subTest(sha=sha, version=version), self.assertRaises(NativeError):
+                self.attempt()
 
     def test_fork_ordinal_base_is_frozen_and_appended_context_keeps_its_native_ordinal(self):
         for version, sha in (("0.163.0-alpha.10.2", SHA_0163), ("0.164.0", SHA_0164),
