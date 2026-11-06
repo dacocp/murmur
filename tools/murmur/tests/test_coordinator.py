@@ -166,6 +166,32 @@ class CoordinatorTests(unittest.TestCase):
         self.ledger.close()
         self.home.cleanup()
 
+    def test_registration_surfaces_operator_contact_hold_without_waking(self):
+        warning = "Configured operator is unavailable; native DM discovery is held"
+        response = {"agent": {"id": self.actor, "name": "Alex", "user_id": "self"},
+                    "enrollment_seq": 0, "operator_dm_discovery_error": warning}
+        with patch.object(self.backend, "register", return_value=response):
+            result = self.coordinator.register(self.identity, "Alex")
+        self.assertEqual(result["operator_dm_discovery_error"], warning)
+        self.assertEqual(self.ledger.actor(self.actor)["user_id"], "self")
+        diagnostic = self.ledger.db.execute(
+            "SELECT surface,error FROM diagnostics WHERE actor=? ORDER BY id DESC LIMIT 1",
+            (self.actor,)).fetchone()
+        self.assertEqual(tuple(diagnostic), ("operator_dm_discovery", warning))
+        self.assertEqual(self.coordinator.inbox(self.actor), [])
+        self.assertEqual(self.transport.calls, [])
+
+    def test_invalid_registration_warning_does_not_provision_local_actor(self):
+        identity = NativeIdentity("codex", "33333333-3333-4333-8333-333333333333", parent_known=True)
+        actor = actor_key(identity)
+        response = {"agent": {"id": actor, "name": "Peer", "user_id": "peer-self"},
+                    "enrollment_seq": 0, "operator_dm_discovery_error": {"invalid": "shape"}}
+        with patch.object(self.backend, "register", return_value=response):
+            with self.assertRaisesRegex(BackendError, "invalid operator DM discovery warning"):
+                self.coordinator.register(identity, "Peer")
+        self.assertIsNone(self.ledger.actor(actor)["user_id"])
+        self.assertEqual(self.transport.calls, [])
+
     def test_spawned_subagent_registration_has_no_enrollment_or_server_effect(self):
         from dataclasses import asdict
         session = "33333333-3333-4333-8333-333333333333"

@@ -207,10 +207,18 @@ class Coordinator:
 
     def _accept_registration(self, record, response):
         agent = response.get("agent", response)
+        warning = response.get("operator_dm_discovery_error")
+        if warning is not None and not isinstance(warning, str):
+            raise BackendError("Server returned an invalid operator DM discovery warning")
         cutoff = response.get("enrollment_seq")
         if record["enrollment_id"] is None:
             cutoff = record["enrollment_seq"]  # Legacy mapping: no historical cutoff can be invented.
         self.ledger.set_registration(record["actor"], agent["user_id"], cutoff)
+        if warning:
+            from .hooks import initialize, record_error
+            initialize(self.ledger.db)
+            record_error(self.ledger, record["actor"], "operator_dm_discovery", warning)
+            return {**agent, "operator_dm_discovery_error": warning}
         return agent
 
     def recover_onboarding(self, actor, plan_id, key, reason):
