@@ -416,7 +416,8 @@ binding an open console to the account whose name it displays.
   pending opens before newer opening/leave intents, including unknown-channel
   pair lookups, without blocking unrelated pairs.
 
-Historical membership is exact post-ID membership in the canonical snapshot
+For explicit human- or agent-initiated DM opens, historical membership is exact
+post-ID membership in the canonical snapshot
 whose classification is successfully persisted at first adoption. Store the
 immutable flag in existing Observation references, never user post props or a
 body mirror. Edits/backfill/replay preserve it. A lost pre-publication snapshot
@@ -424,6 +425,31 @@ may be recaptured; after publication no retry moves the boundary. Posts outside
 it are fresh even at equal timestamps/lower IDs, subject to local eligibility.
 Historical mail remains readable/unread and unannounced; no bulk read or fake
 announcement is created. The first human message is a separate normal post.
+
+Native operator DMs can also be discovered without an explicit open. Probe only
+the existing exact configured-operator/enrolled-bot pair, including deleted
+channels when establishing absence; validate the active human, pinned bot and
+exact two-member DM before publication. Never create a pair while discovering.
+A completed immutable per-pair baseline distinguishes existing history (quiet)
+from a pair created after durably verified absence (fresh). New valid enrollment
+captures its baseline before returning; initial enable/startup captures legacy
+baselines. Canonical repair recovers missed callbacks and restarts. No post
+timestamp or newly assigned observation sequence substitutes for absence proof.
+Publish conversation, canonical observations and member/descendant grants in one
+metadata transaction. Existing managed pairs are neither rebased nor repaired;
+departures and observer-only conflicts cannot be bypassed. Explicit quiet
+adoption wins if it already published the managed pair.
+
+Baseline scope includes the configured human, enrolled actor and actual bot.
+Changing the contact selects its own scope; temporarily disabling and restoring
+the same contact does not rewrite completed evidence. Invalid principal policy
+can return a visible registration warning without disabling peer/channel use.
+For valid principals, inability to establish the first baseline returns a
+retryable registration failure; it must not report ordinary success before the
+first-message guarantee exists. A previously established absence baseline
+survives transient refresh errors. Health exposes per-actor holds without blocking
+unrelated feeds. Failed probes are not absence evidence. Local enrollment,
+manual mode, notification modes and thread follows remain the wakeup gates.
 
 Catalogue/history/thread reads do not observe posts into the event journal, join
 channels, or modify native preferences or any agent's receipts, attention or
