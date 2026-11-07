@@ -68,6 +68,14 @@ _PROFILES = ({
     "asar_sha256": "0c951258b7ab381ec601045ffb02159e53f424548dda18e6a4dcfd126557383b",
     "owner_sha256": "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44",
     "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
+}, {
+    "bundle_id": "com.openai.codex",
+    "version": "26.1103.32239",
+    "build": "25471",
+    "app_sha256": "3f5c9ea81862517e14a3b63e5cb988e6d7b171c77acd0b472b40f2519906ffaa",
+    "asar_sha256": "8e55cbc7f0b7797ca1972cbf6d8b37f26dd8b79d0613235bc7448905a3bc7a2b",
+    "owner_sha256": "a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e",
+    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
 })
 _KIND = "codex-desktop-deep-link-v1"
 _OWNER_RELATIVE_PATH = "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
