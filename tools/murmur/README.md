@@ -603,6 +603,12 @@ sessions use their qualified queue route. Tool-free reasoning and tools without 
 does not interrupt running tools. Several doorbells can arrive within the same
 native turn without an exchange cap.
 
+A Desktop tool may run in another working directory without changing its native
+turn's route. Busy context retains the frozen active-turn route only when the
+actor, turn, enrollment target and freshly captured Desktop generation match;
+all other route differences remain rejected. This does not change registration,
+CLI or idle queue routing, and native receipt verification is still required.
+
 Busy handoff and native acceptance remain separate. The coordinator confirms
 the exact appended harness context in the recipient's native history; agents
 need no acknowledgment command. This proves host acceptance, not that the model
