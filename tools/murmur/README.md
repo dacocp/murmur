@@ -603,21 +603,36 @@ sessions use their qualified queue route. Tool-free reasoning and tools without 
 does not interrupt running tools. Several doorbells can arrive within the same
 native turn without an exchange cap.
 
+A Desktop tool may run in another working directory without changing its native
+turn's route. Busy context retains the frozen active-turn route only when the
+actor, turn, enrollment target and freshly captured Desktop generation match;
+all other route differences remain rejected. This does not change registration,
+CLI or idle queue routing, and native receipt verification is still required.
+
 Busy handoff and native acceptance remain separate. The coordinator confirms
 the exact appended harness context in the recipient's native history; agents
 need no acknowledgment command. This proves host acceptance, not that the model
 sampled or acted on it. The reader supports exact measured backend hashes for
 0.163.0-alpha.10.2, 0.164.0, 0.164.0-alpha.11.1, 0.165.0-alpha.1.2,
-0.166.0-alpha.5.1 and 0.166.0-alpha.6, with a 256 MiB file budget and an
-independent 8 MiB JSONL record budget. Capture has a
+0.166.0-alpha.5.1, 0.166.0-alpha.6 and 0.167.0-alpha.3.2. Legacy schema1 receipts
+retain their 256 MiB file budget and original full-prefix verifier. Exact
+0.166.0-alpha.6 and 0.167.0-alpha.3.2 writers capture schema2 receipts from the
+header, complete EOF and last-record anchor, then verify a bounded 16 MiB window
+of new canonical events. This does not certify the unread historical middle or
+impose a total-history size limit. Both readers retain an independent 8 MiB
+JSONL record budget. Capture has a
 one-second deadline; verification retains its half-second deadline. Complete
 compaction records are validated along with other rows. The creation header
-does not describe the current writer. The exact 0.166.0-alpha.6 hash validates
+does not describe the current writer. The exact event-writer hashes validate
 supported historical header structure and treats the creator version as bounded,
 nonempty printable metadata. It still requires both exact recipient IDs,
 paginated mode and a valid starting ordinal; current-writer certification,
 canonical path, frozen-prefix and modern provenance checks are unchanged.
-Earlier profiles retain their measured creation-version pairs. Header inspection
+Earlier profiles retain their measured creation-version pairs. The Desktop wake
+profiles include ChatGPT 26.1103.32239/build 25471 and 26.1103.60933/build 25894
+with the exact 0.167.0-alpha.3.2
+engine, app, ASAR and launcher bytes; changed bytes remain unsupported. Saved
+attempts keep their original profiles. Header inspection
 alone does not prove native resume or whole-history compatibility. Without a trusted exact
 transcript path, `doctor` reports history compatibility as unverified even
 when the invoking owner profile is certified.
@@ -790,6 +805,10 @@ turns, with admission verified from their native history. This route does not
 install a `PostToolUse` hook. Other macOS Claude profiles retain idle delivery;
 `doctor` reports the recipient's route qualification. Automatically starting a
 stopped Claude Desktop engine remains a separate, unqualified path.
+The exact measured 2.1.321 Desktop engine supports ordinary peer packets and
+the unchanged wrapped peer prompt. Its parallel tool-result and precomputed
+compaction bridges remain unqualified; prior 2.1.309/2.1.317 proofs retain their
+own version-specific checks.
 
 The October 31 desktop update was exercised with ChatGPT 26.1027.30824
 (build 22943, Codex 0.166.0-alpha.5.1) and Claude 4.4212.0

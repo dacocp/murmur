@@ -1,5 +1,7 @@
 """Bounded native hooks. No HTTP, account provisioning or implicit enrollment."""
 
+from copy import deepcopy
+from dataclasses import replace
 import json
 import sqlite3
 import time
@@ -68,6 +70,32 @@ def record_error(ledger, actor, surface, error):
 def lineage_evidence(ledger, identity):
     from . import evidence
     return evidence.lineage_evidence(ledger, identity)
+
+
+def _post_tool_turn_target(identity, enrolled, active, binding, turn_key):
+    """Reuse this Desktop turn's route; receipt capture still certifies its owner."""
+    target = enrolled.get("target", {})
+    frozen = active.get("identity") if active else None
+    if (identity.get("provider") != "codex" or not isinstance(frozen, dict) or not isinstance(target, dict)
+            or active.get("actor") != actor_key(identity)
+            or (active.get("epoch"), active.get("turn_key")) != (binding, turn_key)
+            or (frozen.get("provider"), frozen.get("session_id")) != (identity["provider"], identity["session_id"])
+            or frozen.get("target") != target
+            or "cwd" not in identity["target"] or "cwd" not in target
+            or {k: v for k, v in identity["target"].items() if k != "cwd"}
+               != {k: v for k, v in target.items() if k != "cwd"}):
+        return None
+    current = identity.get("evidence", {}).get("desktop_wake")
+    previous = frozen.get("evidence", {}).get("desktop_wake")
+    fields = ("schema", "kind", "app_bundle", "app", "owner", "pipe", "domain", "startup_supported")
+    if (not isinstance(current, dict) or not isinstance(previous, dict)
+            or any(key not in current or key not in previous or current[key] != previous[key] for key in fields)
+            or type(current["schema"]) is not int or current["schema"] != 1
+            or current["kind"] != "codex-desktop-deep-link-v1" or current["startup_supported"] is not True
+            or any(not isinstance(current[key], dict) for key in ("app", "owner", "pipe", "domain"))
+            or current["domain"].get("supported") is not True):
+        return None
+    return deepcopy(target)
 
 
 def handle(ledger, provider, event, payload):
@@ -167,7 +195,14 @@ def handle(ledger, provider, event, payload):
                                   supersede=True, native_identity=fresh)
         elif captured.event == "post_tool":
             if fresh["target"] != registered["identity"].get("target", {}):
-                raise LedgerError("Native tool target differs from the enrolled route; verify registration")
+                # Desktop proof must be fresh, not inherited by the ancestry merge.
+                target = _post_tool_turn_target(
+                    identity_dict(captured.identity), registered["identity"], ledger.active_turn(actor),
+                    binding, captured.turn_key)
+                if target is None:
+                    raise LedgerError("Native tool target differs from the enrolled route; verify registration")
+                fresh["target"] = target
+                captured = replace(captured, identity=replace(captured.identity, target=target))
             # A hook can establish activity after mid-turn enrollment. It cannot
             # supersede a different turn or resurrect a completed one.
             ledger.start_turn(actor, binding, captured.turn_key, native_identity=fresh)

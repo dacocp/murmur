@@ -27,6 +27,7 @@ from .types import DeliveryResult, NativeError, NativeIdentity, validate_session
 _OWNER_SHAS = frozenset({
     '58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea',
     '508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44',
+    'a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e',
 })
 _KIND = 'codex-idle-handoff-v1'
 _ORDINARY_SOURCE = {'cli': 'cli', 'vscode': 'vscode', 'exec': 'exec', 'appServer': 'mcp'}
@@ -561,7 +562,7 @@ def prepare_idle_target(identity, *, timeout=3):
     """Verify the same actor's actual owner for a *new*, separately fenced claim.
 
     Current healthy legacy routes retain their ordinary one-shot behavior. Only
-    the measured Desktop .166 default domain may refresh a positively ended
+    the measured Desktop default-domain profiles may refresh a positively ended
     backend. Its native thread metadata and creation header are read without
     changing session/parent/target or inventing app-server source provenance.
     """
@@ -585,7 +586,7 @@ def prepare_idle_target(identity, *, timeout=3):
             descriptor = candidate.evidence['desktop_wake']
         if descriptor['verification']['profile']['owner_sha256'] not in _OWNER_SHAS:
             if candidate.evidence['desktop_wake']['owner'] != identity.evidence['desktop_wake']['owner']:
-                raise NativeError('Desktop successor backend is not the qualified .166 profile')
+                raise NativeError('Desktop successor backend is not a qualified idle profile')
             return candidate
         databases = desktop_wake._database_files(descriptor['owner'], descriptor['domain'], until)
         proof = _persisted_thread(candidate, descriptor, until)

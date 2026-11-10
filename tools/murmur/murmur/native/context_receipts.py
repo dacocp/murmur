@@ -36,10 +36,14 @@ _PROFILES = {
     "d84a54b031085f01e3ad915ea7c72ebea4dcf69e90f0d1e0e4a637e8280991d2": "0.165.0-alpha.1.2",
     "58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea": "0.166.0-alpha.5.1",
     "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44": "0.166.0-alpha.6",
+    "a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e": "0.167.0-alpha.3.2",
 }
-# The qualified alpha6 writer checks the historical header's schema; its creator
+# Qualified event writers check the historical header's schema; its creator
 # label is diagnostic metadata, not the identity of the current append owner.
-_STRUCTURAL_CREATION_HEADER_SHA256 = "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44"
+_STRUCTURAL_EVENT_PROFILES = frozenset({
+    "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44",
+    "a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e",
+})
 # Earlier writer profiles retain their exercised append-owner/header pairs.
 _CREATION_HEADER_COMPATIBILITY = {
     "d84a54b031085f01e3ad915ea7c72ebea4dcf69e90f0d1e0e4a637e8280991d2": ("0.164.0-alpha.11.1",),
@@ -249,7 +253,7 @@ def _header(data, identity, profile, deadline):
     record = _decode(first, deadline)
     header = record.get("payload")
     creation = header.get("cli_version") if isinstance(header, dict) else None
-    if profile["sha256"] == _STRUCTURAL_CREATION_HEADER_SHA256:
+    if profile["sha256"] in _STRUCTURAL_EVENT_PROFILES:
         creation_valid = (isinstance(creation, str) and 1 <= len(creation) <= 128
                           and creation.strip() == creation and creation.isprintable())
     else:
@@ -399,7 +403,7 @@ def _event_lines(descriptor, start, end, deadline):
 
 
 def _verify_event_receipt(identity, request, profile, text, token, deadline):
-    if profile["sha256"] != _STRUCTURAL_CREATION_HEADER_SHA256:
+    if profile["sha256"] not in _STRUCTURAL_EVENT_PROFILES:
         raise NativeError("Unsupported native Codex event receipt writer")
     offset, start = request["offset"], request["anchor_start"]
     ordinal_base, anchor_ordinal = request["ordinal_base"], request["anchor_ordinal"]
@@ -471,7 +475,7 @@ def inspect_context_history(identity, profile, transcript_path, *, timeout=0.5):
         deadline = time.monotonic() + timeout
         profile = _profile(profile)
         path = _path(identity, transcript_path)
-        if profile["sha256"] == _STRUCTURAL_CREATION_HEADER_SHA256:
+        if profile["sha256"] in _STRUCTURAL_EVENT_PROFILES:
             with _event_source(path, deadline) as (descriptor, facts, windows):
                 data = _event_header(descriptor, facts.st_size, deadline)
                 _seal_window(windows, 0, data)
@@ -511,7 +515,7 @@ def prepare_context_receipt(captured: HookEvent) -> dict:
         deadline = time.monotonic() + _CAPTURE_TIMEOUT
         profile = _profile(_owner_profile(deadline))
         path = _path(captured.identity, captured.transcript_path)
-        if profile["sha256"] == _STRUCTURAL_CREATION_HEADER_SHA256:
+        if profile["sha256"] in _STRUCTURAL_EVENT_PROFILES:
             return _prepare_event_receipt(captured, profile, path, deadline)
         data, facts = _snapshot(path, deadline)
         header, ordinal_base = _header(data, captured.identity, profile, deadline)

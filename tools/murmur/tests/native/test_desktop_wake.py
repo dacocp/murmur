@@ -392,9 +392,32 @@ class DesktopWakeTests(unittest.TestCase):
 
     def test_new_app_metadata_cannot_fall_back_to_old_profile_hashes(self):
         identity = self.identity()
-        profiles = (*self.profiles[:-1], {**self.profiles[-1], "owner_sha256": "f" * 64})
-        with patch.object(desktop_wake, "_PROFILES", profiles), self.assertRaises(NativeError):
-            desktop_wake.verify(identity)
+        identity = replace(identity, target={**identity.target, "binary": str(self.launcher)})
+        for key in ("app_sha256", "asar_sha256", "owner_sha256", "launcher_sha256"):
+            profiles = (*self.profiles[:-1], {**self.profiles[-1], key: "f" * 64})
+            with self.subTest(key=key), patch.object(desktop_wake, "_PROFILES", profiles), \
+                    self.assertRaises(NativeError):
+                desktop_wake.verify(identity)
+            self.run.assert_not_called()
+
+    def test_recent_builds_are_explicitly_supported(self):
+        for version, build in (("26.1103.32239", "25471"), ("26.1103.60933", "25894")):
+            with self.subTest(build=build):
+                self.info.write_bytes(plistlib.dumps({**self.metadata,
+                    "CFBundleShortVersionString": version, "CFBundleVersion": build}))
+                profile = desktop_wake.verify(self.identity())["verification"]["profile"]
+                self.assertEqual((profile["version"], profile["build"]), (version, build))
+
+    def test_app_update_does_not_relabel_frozen_prior_build_verification(self):
+        prior = self.profiles[-2]
+        self.info.write_bytes(plistlib.dumps({**self.metadata,
+            "CFBundleShortVersionString": prior["version"], "CFBundleVersion": prior["build"]}))
+        verified = desktop_wake.verify(self.identity())
+        self.assertEqual(verified["verification"]["profile"], prior)
+        self.info.write_bytes(plistlib.dumps(self.metadata))
+        self.run.reset_mock()
+        self.assertEqual(desktop_wake.wake(SESSION, verified).status, "uncertain")
+        self.assertEqual(verified["verification"]["profile"], prior)
         self.run.assert_not_called()
 
     def test_backend_or_app_generation_change_rejects_verification(self):

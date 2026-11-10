@@ -19,6 +19,7 @@ SESSION = '11111111-1111-4111-8111-111111111111'
 PARENT = '22222222-2222-4222-8222-222222222222'
 SHA_ALPHA5 = '58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea'
 SHA_ALPHA6 = '508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44'
+SHA_0167 = 'a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e'
 
 
 class _StoreFixture(unittest.TestCase):
@@ -143,18 +144,19 @@ class IdlePreparationTests(_StoreFixture):
             self.header['payload'][field] = old
 
     def test_header_creator_does_not_substitute_for_the_verified_append_owner(self):
-        version = '0.166.0-alpha.6' if self.owner_sha == SHA_ALPHA6 else '0.166.0-alpha.5.1'
+        version = {SHA_ALPHA5: '0.166.0-alpha.5.1', SHA_ALPHA6: '0.166.0-alpha.6',
+                   SHA_0167: '0.167.0-alpha.3.2'}[self.owner_sha]
         self.header['payload']['cli_version'] = version
         self.write_header()
         self.assertEqual(recovery.prepare_idle_target(self.identity).session_id, SESSION)
         self.header['payload']['cli_version'] = (
-            '0.166.0-alpha.5.1' if self.owner_sha == SHA_ALPHA6 else '0.166.0-alpha.6')
+            '0.166.0-alpha.5.1' if self.owner_sha in (SHA_ALPHA6, SHA_0167) else '0.166.0-alpha.6')
         self.write_header()
-        if self.owner_sha == SHA_ALPHA6:
+        if self.owner_sha in (SHA_ALPHA6, SHA_0167):
             before = self.rollout.read_bytes()
             result = recovery.prepare_idle_target(self.identity)
             self.assertEqual(result.session_id, SESSION)
-            self.assertEqual(result.evidence['desktop_wake']['verification']['profile']['owner_sha256'], SHA_ALPHA6)
+            self.assertEqual(result.evidence['desktop_wake']['verification']['profile']['owner_sha256'], self.owner_sha)
             self.assertEqual(self.rollout.read_bytes(), before)
         else:
             with self.assertRaisesRegex(NativeError, 'certified recipient/profile'):
@@ -191,6 +193,21 @@ class IdlePreparationTests(_StoreFixture):
         self.row(cwd=str(other))
         with self.assertRaisesRegex(NativeError, 'cwd differs'):
             recovery.prepare_idle_target(self.identity)
+
+    def test_unqualified_successor_cannot_refresh_or_create_persisted_thread_proof(self):
+        descriptor = deepcopy(self.descriptor)
+        descriptor['owner'] = {'pid': 401, 'birth': 'new backend'}
+        descriptor['verification']['profile']['owner_sha256'] = 'f' * 64
+        successor = replace(self.identity, evidence={**self.identity.evidence, 'desktop_wake': descriptor})
+        self.verify.side_effect = NativeError('old owner ended')
+        self.discover.return_value = successor
+        original = deepcopy(self.identity)
+        with self.assertRaisesRegex(NativeError, 'not a qualified idle profile'):
+            recovery.prepare_idle_target(self.identity)
+        with self.assertRaisesRegex(NativeError, 'qualified Desktop backend profile'):
+            recovery._persisted_thread(successor, descriptor, recovery.files.deadline(3))
+        self.assertEqual(self.identity, original)
+        self.current.assert_not_called()
 
 
 class RetainedQueueTests(_StoreFixture):
@@ -373,7 +390,7 @@ class Alpha6IdlePreparationTests(IdlePreparationTests):
                 self.assertEqual((result.session_id, result.parent_session_id, result.target),
                                  (original.session_id, original.parent_session_id, original.target))
                 self.assertEqual(result.evidence['codex_idle_thread']['source'], 'vscode')
-                self.assertEqual(result.evidence['desktop_wake']['verification']['profile']['owner_sha256'], SHA_ALPHA6)
+                self.assertEqual(result.evidence['desktop_wake']['verification']['profile']['owner_sha256'], self.owner_sha)
                 self.assertEqual((self.database.read_bytes(), self.rollout.read_bytes()), before)
                 self.current.assert_not_called()
                 self.discover.assert_not_called()
@@ -403,6 +420,14 @@ class Alpha6IdlePreparationTests(IdlePreparationTests):
 
 class Alpha6RetainedQueueTests(RetainedQueueTests):
     owner_sha = SHA_ALPHA6
+
+
+class Codex0167IdlePreparationTests(Alpha6IdlePreparationTests):
+    owner_sha = SHA_0167
+
+
+class Codex0167RetainedQueueTests(RetainedQueueTests):
+    owner_sha = SHA_0167
 
 
 class GateTests(_StoreFixture):

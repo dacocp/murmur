@@ -31,6 +31,8 @@ _PROFILES = {
                 "sha256": "40fa5522dc98b3b85d7122c1159b900891107ef6c198e3c8d0fd222586c13e31"},
     "2.1.317": {"build": "91184d3d9ba3",
                 "sha256": "577c8ac6411ef57dd741e3c491e89f57ff6f42bb835a5ac5d4f496c29f14c5d5"},
+    "2.1.321": {"build": "e6736b2d954d",
+                "sha256": "3951931458c81fd08404e7f9dcc31cdf94e182e4326dda3ad0dabd3fd917661a"},
 }
 _CONVERSATION = {"user", "assistant", "attachment", "system", "progress"}
 _ENGINE_HASH_CACHE = None
@@ -543,7 +545,7 @@ def _packet(node, text, emission, version):
     elif node.get("type") == "user":
         packet = node
         content = node.get("message", {}).get("content")
-        exact_body = (content == text or version in {"2.1.309", "2.1.317"} and
+        exact_body = (content == text or version in {"2.1.309", "2.1.317", "2.1.321"} and
                       content == _PEER_PROMPT_PREFIX_309 + text + _PEER_PROMPT_SUFFIX_309)
         if (node.get("message", {}).get("role") != "user" or not exact_body
                 or node.get("isMeta") is not True or node.get("promptSource") != "system"):
@@ -607,8 +609,10 @@ def inspect_peer_history(identity, transcript_path=None, *, timeout=.5):
     try:
         if not supports_peer_delivery(identity):
             version = identity.evidence.get("claude_peer_engine_version")
-            status = "unsupported" if version is not None and version not in _PROFILES else "unverified"
-            return {"status": status, "reason": "No captured measured Claude Desktop peer profile/history"}
+            if version is not None and version not in _PROFILES:
+                return {"status": "unsupported",
+                        "reason": f"Claude Desktop engine {version} has no qualified peer profile"}
+            return {"status": "unverified", "reason": "No captured measured Claude Desktop peer profile/history"}
         deadline = files.deadline(timeout)
         _owner(identity, deadline)
         with _history(identity, deadline, transcript_path) as history:
