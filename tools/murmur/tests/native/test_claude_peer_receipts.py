@@ -21,7 +21,8 @@ VERSION = "2.1.308"
 SHA256 = "8cea5edf53fbb5a521d42f5fa7015288733e41855fbb79bcb48cbce976ed6064"
 UPDATED_SHA256 = "40fa5522dc98b3b85d7122c1159b900891107ef6c198e3c8d0fd222586c13e31"
 LATEST_SHA256 = "577c8ac6411ef57dd741e3c491e89f57ff6f42bb835a5ac5d4f496c29f14c5d5"
-# Independently frozen native wrapper, measured unchanged in 2.1.309/2.1.317.
+CURRENT_SHA256 = "3951931458c81fd08404e7f9dcc31cdf94e182e4326dda3ad0dabd3fd917661a"
+# Independently frozen native wrapper, measured unchanged in 309/317/321.
 WRAPPED_PREFIX = "Another Claude session sent a message:\n"
 WRAPPED_SUFFIX = (
     "\n\nThis came from another Claude session — not typed by your user, but very likely working on their behalf. "
@@ -250,7 +251,7 @@ class PeerReceiptTests(unittest.TestCase):
         stop, later, prompt = self.wrapped_prompt_after_stop()
         self.append(stop, later)
         result = self.verify()
-        if self.version not in {"2.1.309", "2.1.317"}:
+        if self.version not in {"2.1.309", "2.1.317", "2.1.321"}:
             self.assertEqual(result["status"], "unknown", result)
             return
         self.assertEqual(result["status"], "accepted", result)
@@ -563,7 +564,7 @@ class PeerReceiptTests(unittest.TestCase):
         client.sendall.assert_not_called()
 
     def test_compact_summary_is_not_qualified_for_unmeasured_308_shape(self):
-        if self.version in {"2.1.309", "2.1.317"}:
+        if self.version in {"2.1.309", "2.1.317", "2.1.321"}:
             return
         rows, _ = self.compacted_history()
         self.write(rows)
@@ -571,7 +572,7 @@ class PeerReceiptTests(unittest.TestCase):
             self.capture()
 
     def test_parallel_receipt_is_not_qualified_for_308(self):
-        if self.version in {"2.1.309", "2.1.317"}:
+        if self.version in {"2.1.309", "2.1.317", "2.1.321"}:
             return
         rows, nodes = self.parallel_history()
         self.write(rows)
@@ -1070,9 +1071,53 @@ class LatestPeerReceiptTests(PeerReceiptTests):
                 self.assertFalse(any(record.get("subtype") == "stop_hook_summary" for record in records))
 
 
+class CurrentPeerReceiptTests(PeerReceiptTests):
+    version = "2.1.321"
+    build = "e6736b2d954d"
+    sha256 = CURRENT_SHA256
+    other_version = "2.1.317"
+    other_sha256 = LATEST_SHA256
+
+    test_altered_wrapper_sealed_body_or_foreign_origin_stays_unknown = (
+        UpdatedPeerReceiptTests.test_altered_wrapper_sealed_body_or_foreign_origin_stays_unknown)
+    test_wrapped_prompt_cannot_qualify_unknown_profile_or_other_node_version = (
+        UpdatedPeerReceiptTests.test_wrapped_prompt_cannot_qualify_unknown_profile_or_other_node_version)
+
+    def test_new_owner_profile_does_not_qualify_unmeasured_parallel_bridge(self):
+        rows, nodes = self.parallel_history()
+        self.write(rows)
+        self.capture()
+        self.append(nodes["result"], self.packet(nodes["result"]["uuid"]))
+        result = self.verify()
+        self.assertEqual(result["status"], "unknown", result)
+        self.assertIn("captured native history branch", result["reason"])
+
+    def test_new_owner_profile_does_not_qualify_unmeasured_compact_bridge(self):
+        rows, _ = self.compacted_history()
+        self.write(rows)
+        with self.assertRaisesRegex(NativeError, "not a qualified native shape"):
+            self.capture()
+
+    def test_unqualified_version_and_missing_capture_have_distinct_no_read_diagnostics(self):
+        unknown = replace(self.identity, evidence={**self.identity.evidence,
+                          "claude_peer_engine_version": "2.1.999"})
+        missing = replace(self.identity, evidence={})
+        stale = replace(self.identity, evidence={**self.identity.evidence,
+                        "claude_peer_capture_epoch": "old owner epoch"})
+        with patch.object(receipts, "_history", side_effect=AssertionError("No history discovery")):
+            unsupported = receipts.inspect_peer_history(unknown)
+            self.assertEqual(unsupported["status"], "unsupported")
+            self.assertIn("2.1.999", unsupported["reason"])
+            self.assertIn("no qualified peer profile", unsupported["reason"])
+            for identity in (missing, stale):
+                result = receipts.inspect_peer_history(identity)
+                self.assertEqual(result["status"], "unverified")
+                self.assertIn("capture", result["reason"])
+
+
 class HookDiscoveryTests(unittest.TestCase):
     def test_genuine_desktop_hook_captures_only_bounded_lexical_history_facts(self):
-        for version in (VERSION, "2.1.309", "2.1.317"):
+        for version in (VERSION, "2.1.309", "2.1.317", "2.1.321"):
             with self.subTest(version=version):
                 with tempfile.TemporaryDirectory() as directory:
                     home = Path(directory).resolve()

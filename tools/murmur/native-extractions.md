@@ -64,18 +64,22 @@ the fresh thread, replied once, preserved the original tool output, and complete
 that turn. The version string alone never inherits another build's certification.
 Idle queue admission remains a separate proof.
 
-The macOS Codex 0.166 profiles pin these backend bytes:
+The macOS Codex 0.166/0.167 profiles pin these backend bytes:
 
 | Engine | SHA-256 |
 |---|---|
 | 0.166.0-alpha.5.1 | `58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea` |
 | 0.166.0-alpha.6 | `508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44` |
+| 0.167.0-alpha.3.2 | `a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e` |
 
-Their resumed-history compatibility includes only the measured alpha11 creation
-header pair. Desktop wake checks select a complete application profile, including
+Earlier profiles retain their measured creation-header pairs. The exact alpha6
+and alpha3.2 writers accept structurally valid historical headers, treating the
+creator version as diagnostic metadata; their schema2 receipts verify a bounded
+new-event window rather than the historical middle. Desktop wake checks select a complete application profile, including
 version, build, app, archive, backend and launcher hashes; profiles cannot mix.
 The profiles include ChatGPT 26.1023.51421/build22530, 26.1027.30824/build22943,
-26.1027.51404/build23880, 26.1027.61615/build24141 and 26.1029.61003/build24614.
+26.1027.51404/build23880, 26.1027.61615/build24141, 26.1029.61003/build24614,
+26.1103.32239/build25471 and 26.1103.60933/build25894.
 Build 24614 changes the backend to alpha6 while preserving the strict wake-only
 URL and nonempty-queue resume contract. Fresh recipient preparation validates
 the creation header against the actual verified backend. Retained-input recovery
@@ -92,6 +96,11 @@ The macOS Desktop peer profiles pin these engine bytes:
 | 2.1.308 | `8cea5edf53fbb5a521d42f5fa7015288733e41855fbb79bcb48cbce976ed6064` |
 | 2.1.309 | `40fa5522dc98b3b85d7122c1159b900891107ef6c198e3c8d0fd222586c13e31` |
 | 2.1.317 | `577c8ac6411ef57dd741e3c491e89f57ff6f42bb835a5ac5d4f496c29f14c5d5` |
+| 2.1.321 | `3951931458c81fd08404e7f9dcc31cdf94e182e4326dda3ad0dabd3fd917661a` |
+
+The 2.1.321 profile covers ordinary and exact wrapped peer packets. Its parallel
+tool-result and precomputed-compaction bridges remain unqualified; the measured
+2.1.309/2.1.317 bridge checks do not apply to a new engine automatically.
 
 Genuine native hooks capture the transcript path, engine version and owner
 generation. Recovery cannot qualify a replacement owner using earlier capture

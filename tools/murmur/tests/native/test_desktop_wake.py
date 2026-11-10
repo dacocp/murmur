@@ -400,11 +400,13 @@ class DesktopWakeTests(unittest.TestCase):
                 desktop_wake.verify(identity)
             self.run.assert_not_called()
 
-    def test_build_25471_is_explicitly_supported(self):
-        self.info.write_bytes(plistlib.dumps({**self.metadata,
-            "CFBundleShortVersionString": "26.1103.32239", "CFBundleVersion": "25471"}))
-        profile = desktop_wake.verify(self.identity())["verification"]["profile"]
-        self.assertEqual((profile["version"], profile["build"]), ("26.1103.32239", "25471"))
+    def test_recent_builds_are_explicitly_supported(self):
+        for version, build in (("26.1103.32239", "25471"), ("26.1103.60933", "25894")):
+            with self.subTest(build=build):
+                self.info.write_bytes(plistlib.dumps({**self.metadata,
+                    "CFBundleShortVersionString": version, "CFBundleVersion": build}))
+                profile = desktop_wake.verify(self.identity())["verification"]["profile"]
+                self.assertEqual((profile["version"], profile["build"]), (version, build))
 
     def test_app_update_does_not_relabel_frozen_prior_build_verification(self):
         prior = self.profiles[-2]
