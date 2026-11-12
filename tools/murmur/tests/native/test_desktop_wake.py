@@ -401,7 +401,8 @@ class DesktopWakeTests(unittest.TestCase):
             self.run.assert_not_called()
 
     def test_recent_builds_are_explicitly_supported(self):
-        for version, build in (("26.1103.32239", "25471"), ("26.1103.60933", "25894")):
+        for version, build in (("26.1103.32239", "25471"), ("26.1103.60933", "25894"),
+                               ("26.1106.51428", "26605")):
             with self.subTest(build=build):
                 self.info.write_bytes(plistlib.dumps({**self.metadata,
                     "CFBundleShortVersionString": version, "CFBundleVersion": build}))
