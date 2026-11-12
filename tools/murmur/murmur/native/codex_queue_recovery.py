@@ -28,6 +28,7 @@ _OWNER_SHAS = frozenset({
     '58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea',
     '508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44',
     'a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e',
+    '7cb8700a47be3c81bb3c5efbf2d2adc716ce3db4806e9dc992f2925f78b2b194',
 })
 _KIND = 'codex-idle-handoff-v1'
 _ORDINARY_SOURCE = {'cli': 'cli', 'vscode': 'vscode', 'exec': 'exec', 'appServer': 'mcp'}

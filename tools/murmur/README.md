@@ -614,9 +614,9 @@ the exact appended harness context in the recipient's native history; agents
 need no acknowledgment command. This proves host acceptance, not that the model
 sampled or acted on it. The reader supports exact measured backend hashes for
 0.163.0-alpha.10.2, 0.164.0, 0.164.0-alpha.11.1, 0.165.0-alpha.1.2,
-0.166.0-alpha.5.1, 0.166.0-alpha.6 and 0.167.0-alpha.3.2. Legacy schema1 receipts
+0.166.0-alpha.5.1, 0.166.0-alpha.6, 0.167.0-alpha.3.2 and 0.167.0-alpha.4.1. Legacy schema1 receipts
 retain their 256 MiB file budget and original full-prefix verifier. Exact
-0.166.0-alpha.6 and 0.167.0-alpha.3.2 writers capture schema2 receipts from the
+0.166.0-alpha.6, 0.167.0-alpha.3.2 and 0.167.0-alpha.4.1 writers capture schema2 receipts from the
 header, complete EOF and last-record anchor, then verify a bounded 16 MiB window
 of new canonical events. This does not certify the unread historical middle or
 impose a total-history size limit. Both readers retain an independent 8 MiB
@@ -630,8 +630,8 @@ paginated mode and a valid starting ordinal; current-writer certification,
 canonical path, frozen-prefix and modern provenance checks are unchanged.
 Earlier profiles retain their measured creation-version pairs. The Desktop wake
 profiles include ChatGPT 26.1103.32239/build 25471 and 26.1103.60933/build 25894
-with the exact 0.167.0-alpha.3.2
-engine, app, ASAR and launcher bytes; changed bytes remain unsupported. Saved
+with 0.167.0-alpha.3.2, and 26.1106.51428/build 26605 with 0.167.0-alpha.4.1.
+Each pins exact engine, app, ASAR and launcher bytes; changed bytes remain unsupported. Saved
 attempts keep their original profiles. Header inspection
 alone does not prove native resume or whole-history compatibility. Without a trusted exact
 transcript path, `doctor` reports history compatibility as unverified even

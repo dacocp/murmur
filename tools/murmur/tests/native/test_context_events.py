@@ -19,6 +19,7 @@ from . import test_context_receipts as fixtures
 SHA_ALPHA6 = fixtures.SHA_ALPHA6
 SHA_0166 = fixtures.SHA_0166
 SHA_0167 = fixtures.SHA_0167
+SHA_0167_ALPHA4 = fixtures.SHA_0167_ALPHA4
 stored_schema1_capture = fixtures.stored_schema1_capture
 
 
@@ -173,9 +174,15 @@ class EventReceiptTests(unittest.TestCase):
         self.assertEqual(native.prepare_context_receipt(self.captured)['schema'], 1)
 
     def test_0167_exact_writer_keeps_event_contract_and_frozen_older_profile(self):
+        self.assert_qualified_writer(SHA_0167, '0.167.0-alpha.3.2')
+
+    def test_0167_alpha4_writer_keeps_event_contract_and_frozen_older_profile(self):
+        self.assert_qualified_writer(SHA_0167_ALPHA4, '0.167.0-alpha.4.1')
+
+    def assert_qualified_writer(self, sha256, version):
         previous = self.attempt()
         self.append(self.next_row(previous))
-        self.profile.update(sha256=SHA_0167, version='0.167.0-alpha.3.2')
+        self.profile.update(sha256=sha256, version=version)
         self.assertEqual(self.verify(previous)['evidence']['profile']['sha256'], SHA_ALPHA6)
 
         self.reset_stream(header={'cli_version': '0.164.0-alpha.11.1'}, ordinal_base=19066)
@@ -190,12 +197,12 @@ class EventReceiptTests(unittest.TestCase):
         frozen, before = deepcopy(attempt), self.path.read_bytes()
         result = self.verify(attempt)
         self.assertEqual(result['status'], 'accepted', result)
-        self.assertEqual(result['evidence']['profile']['sha256'], SHA_0167)
+        self.assertEqual(result['evidence']['profile']['sha256'], sha256)
         self.assertEqual(result['evidence']['source'], KIND)
         self.assertEqual(result['evidence']['ordinal'], 19068)
         self.assertEqual((attempt, self.path.read_bytes()), (frozen, before))
-        for sha, version in ((SHA_0167, '0.166.0-alpha.6'),
-                             ('f' * 64, '0.167.0-alpha.3.2')):
+        for sha, version in ((sha256, '0.166.0-alpha.6'),
+                             ('f' * 64, version), (SHA_ALPHA6, version)):
             changed = deepcopy(attempt)
             changed['receipt_request']['profile'].update(sha256=sha, version=version)
             with self.subTest(sha=sha, version=version):
