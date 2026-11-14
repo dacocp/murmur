@@ -21,6 +21,7 @@ SHA_ALPHA5 = '58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea'
 SHA_ALPHA6 = '508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44'
 SHA_0167 = 'a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e'
 SHA_0167_ALPHA4 = '7cb8700a47be3c81bb3c5efbf2d2adc716ce3db4806e9dc992f2925f78b2b194'
+SHA_0169 = '3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b'
 
 
 class _StoreFixture(unittest.TestCase):
@@ -146,14 +147,15 @@ class IdlePreparationTests(_StoreFixture):
 
     def test_header_creator_does_not_substitute_for_the_verified_append_owner(self):
         version = {SHA_ALPHA5: '0.166.0-alpha.5.1', SHA_ALPHA6: '0.166.0-alpha.6',
-                   SHA_0167: '0.167.0-alpha.3.2', SHA_0167_ALPHA4: '0.167.0-alpha.4.1'}[self.owner_sha]
+                   SHA_0167: '0.167.0-alpha.3.2', SHA_0167_ALPHA4: '0.167.0-alpha.4.1',
+                   SHA_0169: '0.169.0-alpha.11.1'}[self.owner_sha]
         self.header['payload']['cli_version'] = version
         self.write_header()
         self.assertEqual(recovery.prepare_idle_target(self.identity).session_id, SESSION)
         self.header['payload']['cli_version'] = (
-            '0.166.0-alpha.5.1' if self.owner_sha in (SHA_ALPHA6, SHA_0167, SHA_0167_ALPHA4) else '0.166.0-alpha.6')
+            '0.166.0-alpha.5.1' if self.owner_sha in (SHA_ALPHA6, SHA_0167, SHA_0167_ALPHA4, SHA_0169) else '0.166.0-alpha.6')
         self.write_header()
-        if self.owner_sha in (SHA_ALPHA6, SHA_0167, SHA_0167_ALPHA4):
+        if self.owner_sha in (SHA_ALPHA6, SHA_0167, SHA_0167_ALPHA4, SHA_0169):
             before = self.rollout.read_bytes()
             result = recovery.prepare_idle_target(self.identity)
             self.assertEqual(result.session_id, SESSION)
@@ -437,6 +439,13 @@ class Codex0167Alpha4IdlePreparationTests(Codex0167IdlePreparationTests):
 
 class Codex0167Alpha4RetainedQueueTests(Codex0167RetainedQueueTests):
     owner_sha = SHA_0167_ALPHA4
+
+class Codex0169IdlePreparationTests(Codex0167IdlePreparationTests):
+    owner_sha = SHA_0169
+
+
+class Codex0169RetainedQueueTests(Codex0167RetainedQueueTests):
+    owner_sha = SHA_0169
 
 
 class GateTests(_StoreFixture):
