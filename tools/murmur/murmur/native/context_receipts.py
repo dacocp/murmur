@@ -38,6 +38,7 @@ _PROFILES = {
     "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44": "0.166.0-alpha.6",
     "a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e": "0.167.0-alpha.3.2",
     "7cb8700a47be3c81bb3c5efbf2d2adc716ce3db4806e9dc992f2925f78b2b194": "0.167.0-alpha.4.1",
+    "3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b": "0.169.0-alpha.11.1",
 }
 # Qualified event writers check the historical header's schema; its creator
 # label is diagnostic metadata, not the identity of the current append owner.
@@ -45,6 +46,7 @@ _STRUCTURAL_EVENT_PROFILES = frozenset({
     "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44",
     "a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e",
     "7cb8700a47be3c81bb3c5efbf2d2adc716ce3db4806e9dc992f2925f78b2b194",
+    "3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b",
 })
 # Earlier writer profiles retain their exercised append-owner/header pairs.
 _CREATION_HEADER_COMPATIBILITY = {
