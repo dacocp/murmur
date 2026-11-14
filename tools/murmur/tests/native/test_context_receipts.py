@@ -24,6 +24,7 @@ SHA_0166 = "58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea"
 SHA_ALPHA6 = "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44"
 SHA_0167 = "a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e"
 SHA_0167_ALPHA4 = "7cb8700a47be3c81bb3c5efbf2d2adc716ce3db4806e9dc992f2925f78b2b194"
+SHA_0169 = "3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b"
 
 
 def stored_schema1_capture(captured, profile):
@@ -355,7 +356,9 @@ class ContextReceiptTests(unittest.TestCase):
                                        (SHA_0167, "0.167.0-alpha.3.2", "0.167.0-alpha.3.2"),
                                        (SHA_0167, "0.167.0-alpha.3.2", "0.164.0-alpha.11.1"),
                                        (SHA_0167_ALPHA4, "0.167.0-alpha.4.1", "0.167.0-alpha.4.1"),
-                                       (SHA_0167_ALPHA4, "0.167.0-alpha.4.1", "0.162.0-alpha.2")):
+                                       (SHA_0167_ALPHA4, "0.167.0-alpha.4.1", "0.162.0-alpha.2"),
+                                       (SHA_0169, "0.169.0-alpha.11.1", "0.169.0-alpha.11.1"),
+                                       (SHA_0169, "0.169.0-alpha.11.1", "0.162.0-alpha.2")):
             self.profile.update(version=version, sha256=sha)
             for provenance in ("valid", None, {"type": "harness", "hook": False},
                                {"type": "harness", "hook": 1},

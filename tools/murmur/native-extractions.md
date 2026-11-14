@@ -64,7 +64,7 @@ the fresh thread, replied once, preserved the original tool output, and complete
 that turn. The version string alone never inherits another build's certification.
 Idle queue admission remains a separate proof.
 
-The macOS Codex 0.166/0.167 profiles pin these backend bytes:
+The macOS Codex 0.166/0.167/0.169 profiles pin these backend bytes:
 
 | Engine | SHA-256 |
 |---|---|
@@ -72,15 +72,17 @@ The macOS Codex 0.166/0.167 profiles pin these backend bytes:
 | 0.166.0-alpha.6 | `508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44` |
 | 0.167.0-alpha.3.2 | `a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e` |
 | 0.167.0-alpha.4.1 | `7cb8700a47be3c81bb3c5efbf2d2adc716ce3db4806e9dc992f2925f78b2b194` |
+| 0.169.0-alpha.11.1 | `3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b` |
 
 Earlier profiles retain their measured creation-header pairs. The exact alpha6
-and 0.167 alpha3.2/alpha4.1 writers accept structurally valid historical headers, treating the
+and 0.167 alpha3.2/alpha4.1 and 0.169 alpha11.1 writers accept structurally valid historical headers, treating the
 creator version as diagnostic metadata; their schema2 receipts verify a bounded
 new-event window rather than the historical middle. Desktop wake checks select a complete application profile, including
 version, build, app, archive, backend and launcher hashes; profiles cannot mix.
 The profiles include ChatGPT 26.1023.51421/build22530, 26.1027.30824/build22943,
 26.1027.51404/build23880, 26.1027.61615/build24141, 26.1029.61003/build24614,
-26.1103.32239/build25471, 26.1103.60933/build25894 and 26.1106.51428/build26605.
+26.1103.32239/build25471, 26.1103.60933/build25894, 26.1106.51428/build26605 and
+26.1111.21308/build27194.
 Build 24614 changes the backend to alpha6 while preserving the strict wake-only
 URL and nonempty-queue resume contract. Fresh recipient preparation validates
 the creation header against the actual verified backend. Retained-input recovery
