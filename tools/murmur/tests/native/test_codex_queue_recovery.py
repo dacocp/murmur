@@ -128,6 +128,22 @@ class IdlePreparationTests(_StoreFixture):
             with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
                 recovery.prepare_idle_target(self.identity)
 
+    def test_changed_verified_descriptor_cannot_use_closed_history_exception(self):
+        _, listing = self.closed_history_files()
+        changes = (('app', 'birth', 'changed app generation'),
+                   ('owner', 'birth', 'changed owner generation'),
+                   ('pipe', 'inode', 99),
+                   ('domain', 'sqlite_home', str(self.root / 'other-databases')))
+        for key, field, value in changes:
+            with self.subTest(component=key):
+                changed = deepcopy(self.descriptor)
+                changed[key][field] = value
+                self.verify.return_value = changed
+                with patch.object(recovery.desktop_wake, '_database_files', wraps=REAL_DATABASE_FILES), \
+                        patch.object(recovery.desktop_wake, '_listing', return_value=listing):
+                    with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
+                        recovery.prepare_idle_target(self.identity)
+
     def test_healthy_owner_readonly_metadata_preserves_session_parent_target_and_provenance(self):
         original = deepcopy(self.identity)
         before = self.database.read_bytes(), self.rollout.read_bytes()
