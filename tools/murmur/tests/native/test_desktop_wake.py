@@ -187,6 +187,62 @@ class DesktopWakeTests(unittest.TestCase):
         self.assertEqual(value['verification']['profile'], self.profiles[-1])
         self.assertFalse(any(command.args[0][0] == '/usr/bin/open' for command in self.run.call_args_list))
 
+    def test_closed_history_exception_keeps_queue_and_state_fd_ownership_required(self):
+        self.successor_fixture()
+        for missing in self.database_paths[:2]:
+            with self.subTest(missing=missing.name):
+                self.owner_files = '\n'.join(f'f{i}\nD{hex(p.stat().st_dev)}\ni{p.stat().st_ino}\nn{p}'
+                                             for i, p in enumerate(self.database_paths) if p != missing)
+                with self.assertRaisesRegex(NativeError, 'safe default native databases: ' + missing.name):
+                    desktop_wake._database_files({'pid': 401}, {'codex_home': str(self.root / '.codex')},
+                                                  desktop_wake.files.deadline(3), require_history_handle=False)
+
+    def test_closed_history_exception_rejects_unsafe_or_foreign_history_path(self):
+        self.successor_fixture()
+        history = self.database_paths[-1]
+        self.owner_files = '\n'.join(f'f{i}\nD{hex(p.stat().st_dev)}\ni{p.stat().st_ino}\nn{p}'
+                                     for i, p in enumerate(self.database_paths[:-1]))
+        def check():
+            return desktop_wake._database_files({'pid': 401}, {'codex_home': str(self.root / '.codex')},
+                                                 desktop_wake.files.deadline(3), require_history_handle=False)
+        self.assertIn(str(history), check())
+        history.chmod(0o666)
+        with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
+            check()
+        history.chmod(0o644)
+        original_lstat = Path.lstat
+        def foreign_owner(path, *args, **kwargs):
+            facts = original_lstat(path, *args, **kwargs)
+            return (SimpleNamespace(st_uid=facts.st_uid + 1, st_mode=facts.st_mode,
+                                    st_dev=facts.st_dev, st_ino=facts.st_ino)
+                    if path == history else facts)
+        with patch.object(Path, 'lstat', foreign_owner):
+            with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
+                check()
+        moved = history.with_suffix('.original')
+        history.rename(moved)
+        history.symlink_to(moved)
+        with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
+            check()
+        history.unlink()
+        history.mkdir()
+        with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
+            check()
+
+    def test_optional_history_fd_still_rejects_any_present_stale_mapping(self):
+        self.successor_fixture()
+        for path in self.database_paths:
+            with self.subTest(database=path.name):
+                replacement = path.with_suffix('.replacement')
+                replacement.write_bytes(path.read_bytes())
+                replacement.chmod(0o644)
+                os.replace(replacement, path)
+                with self.assertRaisesRegex(NativeError, 'FD differs from its pathname: ' + path.name):
+                    desktop_wake._database_files({'pid': 401}, {'codex_home': str(self.root / '.codex')},
+                                                  desktop_wake.files.deadline(3), require_history_handle=False)
+                self.owner_files = '\n'.join(f'f{i}\nD{hex(p.stat().st_dev)}\ni{p.stat().st_ino}\nn{p}'
+                                             for i, p in enumerate(self.database_paths))
+
     def test_successor_ambiguity_unsupported_args_or_missing_database_stay_held(self):
         identity = self.successor_fixture()
         initial = self.inventory

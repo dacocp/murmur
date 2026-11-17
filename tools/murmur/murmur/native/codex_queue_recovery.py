@@ -577,9 +577,15 @@ def prepare_idle_target(identity, *, timeout=3):
             raise NativeError(reason)
         if identity.evidence.get('desktop_wake') is None:
             return codex.verify_target(identity, timeout=files.remaining(until))
+        require_history_handle = True
         try:
             descriptor = desktop_wake.verify(identity, timeout=files.remaining(until))
             candidate = replace(identity, evidence={**identity.evidence, 'desktop_wake': descriptor})
+            # A verified unchanged owner may close its history connection while idle.
+            # Fresh claims still pin its queue/state FDs and all three safe paths.
+            frozen = identity.evidence['desktop_wake']
+            require_history_handle = any(descriptor[key] != frozen[key]
+                                         for key in ('app', 'owner', 'pipe', 'domain'))
         except NativeError:
             state = desktop_wake.owner_process_state(identity, timeout=files.remaining(until))
             if state['status'] != 'ended':
@@ -590,13 +596,15 @@ def prepare_idle_target(identity, *, timeout=3):
             if candidate.evidence['desktop_wake']['owner'] != identity.evidence['desktop_wake']['owner']:
                 raise NativeError('Desktop successor backend is not a qualified idle profile')
             return candidate
-        databases = desktop_wake._database_files(descriptor['owner'], descriptor['domain'], until)
+        databases = desktop_wake._database_files(descriptor['owner'], descriptor['domain'], until,
+                                                 require_history_handle=require_history_handle)
         proof = _persisted_thread(candidate, descriptor, until)
         desktop_wake._recheck(descriptor, until)
         if any(desktop_wake._signature(Path(path)) != signature
                for path, signature in descriptor['verification']['files'].items()):
             raise NativeError('Codex Desktop source changed during idle preparation')
-        if desktop_wake._database_files(descriptor['owner'], descriptor['domain'], until) != databases:
+        if desktop_wake._database_files(descriptor['owner'], descriptor['domain'], until,
+                                        require_history_handle=require_history_handle) != databases:
             raise NativeError('Codex Desktop native database generation changed')
         files.remaining(until)
         return replace(candidate, evidence={**candidate.evidence, 'codex_idle_thread': proof})
