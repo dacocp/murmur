@@ -14,6 +14,7 @@ from unittest.mock import patch
 from murmur.native import codex_queue_recovery as recovery
 from murmur.native.types import DeliveryResult, NativeError, NativeIdentity
 
+REAL_DATABASE_FILES = recovery.desktop_wake._database_files
 
 SESSION = '11111111-1111-4111-8111-111111111111'
 PARENT = '22222222-2222-4222-8222-222222222222'
@@ -77,8 +78,71 @@ class _StoreFixture(unittest.TestCase):
             for key, value in changes.items():
                 connection.execute(f'UPDATE threads SET {key}=? WHERE id=?', (value, SESSION))
 
+    def closed_history_files(self):
+        queue, history = self.home / 'queue_1.sqlite', self.home / 'thread_history_1.sqlite'
+        for path in (queue, history):
+            path.write_bytes(b'synthetic native database file')
+            path.chmod(0o644)
+        lines = []
+        for index, path in enumerate((queue, self.database)):
+            facts = path.stat()
+            lines.extend((f'f{index}', f'D{hex(facts.st_dev)}', f'i{facts.st_ino}', f'n{path}'))
+        return history, lines
+
 
 class IdlePreparationTests(_StoreFixture):
+
+    def test_verified_unchanged_owner_can_prepare_with_closed_history_database(self):
+        history, listing = self.closed_history_files()
+        before = history.stat().st_ino, self.database.read_bytes(), self.rollout.read_bytes()
+        with patch.object(recovery.desktop_wake, '_database_files', wraps=REAL_DATABASE_FILES), \
+                patch.object(recovery.desktop_wake, '_listing', return_value=listing):
+            result = recovery.prepare_idle_target(self.identity)
+        self.assertEqual(result.evidence['codex_idle_thread']['session_id'], SESSION)
+        self.assertEqual(result.evidence['desktop_wake']['owner'], self.descriptor['owner'])
+        self.assertEqual((history.stat().st_ino, self.database.read_bytes(), self.rollout.read_bytes()), before)
+        self.owner.assert_not_called()
+        self.discover.assert_not_called()
+
+    def test_closed_history_replacement_during_preparation_still_fails(self):
+        history, listing = self.closed_history_files()
+        def replace_history(*args, **kwargs):
+            replacement = history.with_suffix('.replacement')
+            replacement.write_bytes(history.read_bytes())
+            replacement.chmod(0o644)
+            os.replace(replacement, history)
+        with patch.object(recovery.desktop_wake, '_database_files', wraps=REAL_DATABASE_FILES), \
+                patch.object(recovery.desktop_wake, '_listing', return_value=listing), \
+                patch.object(recovery.desktop_wake, '_recheck', side_effect=replace_history):
+            with self.assertRaisesRegex(NativeError, 'native database generation changed'):
+                recovery.prepare_idle_target(self.identity)
+
+    def test_successor_refresh_still_requires_live_history_handle(self):
+        _, listing = self.closed_history_files()
+        self.verify.side_effect = NativeError('old owner ended')
+        successor = replace(self.identity, evidence={**self.identity.evidence, 'desktop_wake': {
+            **self.descriptor, 'owner': {'pid': 401, 'birth': 'new backend'}}})
+        self.discover.return_value = successor
+        with patch.object(recovery.desktop_wake, '_database_files', wraps=REAL_DATABASE_FILES), \
+                patch.object(recovery.desktop_wake, '_listing', return_value=listing):
+            with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
+                recovery.prepare_idle_target(self.identity)
+
+    def test_changed_verified_descriptor_cannot_use_closed_history_exception(self):
+        _, listing = self.closed_history_files()
+        changes = (('app', 'birth', 'changed app generation'),
+                   ('owner', 'birth', 'changed owner generation'),
+                   ('pipe', 'inode', 99),
+                   ('domain', 'sqlite_home', str(self.root / 'other-databases')))
+        for key, field, value in changes:
+            with self.subTest(component=key):
+                changed = deepcopy(self.descriptor)
+                changed[key][field] = value
+                self.verify.return_value = changed
+                with patch.object(recovery.desktop_wake, '_database_files', wraps=REAL_DATABASE_FILES), \
+                        patch.object(recovery.desktop_wake, '_listing', return_value=listing):
+                    with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
+                        recovery.prepare_idle_target(self.identity)
 
     def test_healthy_owner_readonly_metadata_preserves_session_parent_target_and_provenance(self):
         original = deepcopy(self.identity)

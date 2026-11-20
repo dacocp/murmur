@@ -176,7 +176,8 @@ def _listing(command, until):
     return result.stdout.splitlines()
 
 
-def _database_files(owner, domain, until):
+def _database_files(owner, domain, until, *, require_history_handle=True):
+    """Pin safe database paths and any open handles; successor checks stay strict."""
     root = Path(domain["codex_home"])
     paths = [root / name for name in ("queue_1.sqlite", "state_5.sqlite", "thread_history_1.sqlite")]
     records, current = [], None
@@ -190,12 +191,13 @@ def _database_files(owner, domain, until):
     for path in paths:
         facts = path.lstat()
         descriptors = [record for record in records if record.get('n') == str(path)]
-        if (not descriptors or path.resolve(strict=True) != path
+        needs_handle = require_history_handle or path.name != "thread_history_1.sqlite"
+        if ((needs_handle and not descriptors) or path.resolve(strict=True) != path
                 or not stat.S_ISREG(facts.st_mode) or facts.st_uid != os.getuid() or facts.st_mode & 0o022):
-            raise NativeError("Desktop successor does not own the safe default native databases")
+            raise NativeError("Desktop successor does not own the safe default native databases: " + path.name)
         if any((int(record.get('D', '-1'), 0), int(record.get('i', '-1'), 10)) != (facts.st_dev, facts.st_ino)
                for record in descriptors):
-            raise NativeError("Desktop successor native database FD differs from its pathname")
+            raise NativeError("Desktop successor native database FD differs from its pathname: " + path.name)
         result[str(path)] = [facts.st_dev, facts.st_ino, facts.st_uid, facts.st_mode]
     return result
 
