@@ -100,6 +100,25 @@ _PROFILES = ({
     "asar_sha256": "64782f30d783c24eb483e92f9a2e884ada6d24dc105fc27659ba16e073da145c",
     "owner_sha256": "3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b",
     "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
+}, {
+    "bundle_id": "com.openai.codex",
+    "version": "26.1111.71704",
+    "build": "29030",
+    "app_sha256": "2ab4ecacdc858968d59b5c2663b420b9c1bc2bc9224a5c196068ce1132e86ca7",
+    "asar_sha256": "10efb2dd0d46bdc11efe687fbb5cc8cdb89dd4f3be24c509f5c9a18fec13f37a",
+    "owner_sha256": "f69d8040091fc4997fb37e7f5ada428ec2fd06656b66ff5a72b31e12e0e67c20",
+    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
+}, {
+    "bundle_id": "com.openai.codex",
+    "version": "26.1117.31558",
+    "build": "29513",
+    "app_sha256": "ab12fa487670db87849e6a6565b70e97b927f5d860e175a34f82aeef94975167",
+    "asar_sha256": "97f9f40a31a1512cca57c0e06fedc568642a8f84a10abc637d96ffeca3f5e6ac",
+    "owner_sha256": "3b6d00deea5fabc50ad34be1872b8e4ead1638d23c68fabb7837edc07f0cf1e0",
+    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
+    "helper_relative_path": "Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)",
+    "helper_sha256": "1cb1d968da97de4211d84eae06117eca08d8add072ad610f649b1d2df99e5781",
+    "launch_cwd_args": True,
 })
 _KIND = "codex-desktop-deep-link-v1"
 _OWNER_RELATIVE_PATH = "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
@@ -128,7 +147,7 @@ def owner_process_state(identity, *, timeout=3):
     except (OSError, ValueError, TypeError, KeyError):
         return {"status": "unknown", "reason": "invalid_recorded_desktop_owner"}
     states = {}
-    for name in ("app", "owner"):
+    for name in (("app", "helper", "owner") if "helper" in value else ("app", "owner")):
         recorded = value[name]
         pid, birth = recorded["pid"], recorded["birth"]
         if pid >= 2**31 or len(birth) > 256 or any(c in birth for c in "\n\r\0"):
@@ -215,9 +234,11 @@ def discover_successor(identity, *, timeout=3):
             raise NativeError("Desktop successor discovery requires a captured Codex Desktop")
         original = _identity_descriptor(identity)
         bundle = _absolute(original["app_bundle"])
-        expected = {"app": str(bundle / "Contents/MacOS/ChatGPT"),
-                    "owner": str(bundle / _OWNER_RELATIVE_PATH)}
-        candidates = {"app": [], "owner": []}
+        expected = {"app": {str(bundle / "Contents/MacOS/ChatGPT")},
+                    "owner": {str(bundle / _OWNER_RELATIVE_PATH)},
+                    "helper": {str(bundle / profile["helper_relative_path"]) for profile in _PROFILES
+                               if "helper_relative_path" in profile}}
+        candidates = {kind: [] for kind in expected}
         rows = _listing(["/bin/ps", "-axo", "pid=,uid=,comm="], until)
         if len(rows) > 16_384:
             raise NativeError("Desktop successor process inventory exceeds its bound")
@@ -227,8 +248,8 @@ def discover_successor(identity, *, timeout=3):
                 raise NativeError("Desktop successor process inventory is malformed")
             if int(parts[1]) != os.getuid():
                 continue
-            for kind, executable in expected.items():
-                if parts[2] == executable:
+            for kind, executables in expected.items():
+                if parts[2] in executables:
                     candidates[kind].append(int(parts[0]))
         if len(candidates['app']) != 1:
             raise NativeError("Desktop successor app is absent or ambiguous")
@@ -236,12 +257,19 @@ def discover_successor(identity, *, timeout=3):
         eligible = []
         for pid in candidates['owner']:
             owner, argv = _inspect(pid, until)
-            if (owner['executable'] == expected['owner'] and owner['parent_pid'] == app['pid']
-                    and _startup_supported(argv, app_argv)):
-                eligible.append(owner)
-        if app['executable'] != expected['app'] or len(eligible) != 1:
+            helper = None
+            if owner['parent_pid'] != app['pid']:
+                if owner['parent_pid'] not in candidates['helper']:
+                    continue
+                helper, helper_argv = _inspect(owner['parent_pid'], until)
+                if helper['parent_pid'] != app['pid'] or not _helper_role_supported(helper_argv):
+                    continue
+            if (owner['executable'] in expected['owner']
+                    and _startup_supported(argv, app_argv, bundle=bundle, helper=helper)):
+                eligible.append((owner, helper))
+        if app['executable'] not in expected['app'] or len(eligible) != 1:
             raise NativeError("Desktop successor eligible backend/startup domain is absent or ambiguous")
-        owner = eligible[0]
+        owner, helper = eligible[0]
         pipe_root = Path(_TOOLS_DIRECTORY).resolve(strict=True)
         sockets = []
         for line in _listing(["/usr/sbin/lsof", "-nP", "-a", "-p", str(app["pid"]), "-U", "-Fn"], until):
@@ -259,6 +287,8 @@ def discover_successor(identity, *, timeout=3):
         value = {"schema": 1, "kind": _KIND, "app_bundle": str(bundle),
                  "app": app, "owner": owner, "pipe": sockets[0],
                  "domain": deepcopy(original["domain"]), "startup_supported": True}
+        if helper is not None:
+            value["helper"] = helper
         databases = _database_files(owner, value["domain"], until)
         candidate = replace(identity, evidence={**identity.evidence, "desktop_wake": value})
         verified = verify(candidate, timeout=files.remaining(until))
@@ -340,10 +370,37 @@ def _peer_owner(value, until):
     files.remaining(until)
 
 
-def _startup_supported(argv, app_argv):
+def _helper_profile(bundle, helper):
+    path = Path(helper["executable"])
+    profile = next((profile for profile in _PROFILES
+                    if "helper_relative_path" in profile
+                    and path == bundle / profile["helper_relative_path"]), None)
+    if profile is None or path != _absolute(str(path)):
+        raise NativeError("Desktop wake helper is outside a qualified captured app path")
+    return profile
+
+
+def _helper_role_supported(argv):
+    roles = {"--type": "utility", "--utility-sub-type": "node.mojom.NodeService",
+             "--service-sandbox-type": "none"}
+    return all([arg for arg in argv[1:] if arg == flag or arg.startswith(flag + "=")]
+               == [flag + "=" + value] for flag, value in roles.items())
+
+
+def _startup_supported(argv, app_argv, *, bundle=None, helper=None):
     if any(arg == "--user-data-dir" or arg.startswith("--user-data-dir=") for arg in app_argv[1:]):
         return False
-    args, index, server = argv[1:], 0, 0
+    args, index, server = list(argv[1:]), 0, 0
+    if helper is not None:
+        profile = _helper_profile(bundle, helper)
+        if profile.get("launch_cwd_args") is True:
+            home = str(Path(pwd.getpwuid(os.getuid()).pw_dir).resolve() / ".codex")
+            node = str(bundle / "Contents/Resources/cua_node/bin/node_repl")
+            suffix = ["--plugin-mcp-launch-cwd", "unified-computer-use@openai-bundled", "cua_repl", home,
+                      "--mcp-launch-cwd", "node_repl", node, home,
+                      "--mcp-launch-cwd", "artifact_session", node, home]
+            if args[-len(suffix):] == suffix:
+                args = args[:-len(suffix)]
     while index < len(args):
         value = args[index]
         if value in {"-c", "--config"} and index + 1 < len(args):
@@ -380,6 +437,10 @@ def _capture(env, timeout):
         if "app-server" not in argv[1:]:
             return None
         app, app_argv = _inspect(owner["parent_pid"], until)
+        helper, helper_argv = None, ()
+        if Path(app["executable"]).name == "Codex (Aperitif)":
+            helper, helper_argv = app, app_argv
+            app, app_argv = _inspect(helper["parent_pid"], until)
         executable = Path(app["executable"])
         if (executable.name != "ChatGPT" or executable.parent.name != "MacOS"
                 or executable.parent.parent.name != "Contents"
@@ -388,9 +449,17 @@ def _capture(env, timeout):
         bundle = executable.parent.parent.parent
         if Path(owner["executable"]) != bundle / _OWNER_RELATIVE_PATH:
             return None
+        if helper is not None:
+            _helper_profile(bundle, helper)
+            if len({app["pid"], helper["pid"], owner["pid"]}) != 3:
+                raise NativeError("Desktop wake process chain repeats a PID")
         result = {"schema": 1, "kind": _KIND, "app_bundle": str(bundle),
                   "app": app, "owner": owner, "pipe": _socket(values[_PIPE_ENV]),
-                  "domain": _domain(values), "startup_supported": _startup_supported(argv, app_argv)}
+                  "domain": _domain(values),
+                  "startup_supported": (helper is None or _helper_role_supported(helper_argv))
+                                       and _startup_supported(argv, app_argv, bundle=bundle, helper=helper)}
+        if helper is not None:
+            result["helper"] = helper
         files.remaining(until)
         return result
     raise NativeError("Desktop wake invoking ancestry exceeds its supported bound")
@@ -415,15 +484,25 @@ def _descriptor(value):
             or not isinstance(value.get("domain"), dict) or value["domain"].get("supported") is not True
             or value.get("startup_supported") is not True):
         raise NativeError("Desktop wake requires a supported captured local Desktop domain")
-    _absolute(value["app_bundle"])
-    for key in ("app", "owner"):
+    bundle = _absolute(value["app_bundle"])
+    names = ("app", "helper", "owner") if "helper" in value else ("app", "owner")
+    for key in names:
         facts = value[key]
         if (not isinstance(facts, dict) or type(facts.get("pid")) is not int or facts["pid"] <= 1
                 or facts.get("uid") != os.getuid() or not isinstance(facts.get("birth"), str) or not facts["birth"]
-                or not isinstance(facts.get("argv_sha256"), str) or len(facts["argv_sha256"]) != 64):
+                or not isinstance(facts.get("argv_sha256"), str) or len(facts["argv_sha256"]) != 64
+                or type(facts.get("parent_pid")) is not int or facts["parent_pid"] < 0
+                or facts["parent_pid"] == facts["pid"]):
             raise NativeError("Desktop wake process capture is invalid")
         _absolute(facts["executable"])
-    if value["owner"]["parent_pid"] != value["app"]["pid"]:
+    if len({value[name]["pid"] for name in names}) != len(names):
+        raise NativeError("Desktop wake process chain repeats a PID")
+    if "helper" in value:
+        _helper_profile(bundle, value["helper"])
+        if (value["helper"]["parent_pid"] != value["app"]["pid"]
+                or value["owner"]["parent_pid"] != value["helper"]["pid"]):
+            raise NativeError("Desktop wake owner is not the captured app's helper child")
+    elif value["owner"]["parent_pid"] != value["app"]["pid"]:
         raise NativeError("Desktop wake owner is not the captured app's direct child")
     return value
 
@@ -454,7 +533,13 @@ def _identity_descriptor(identity):
 def _recheck(value, until, *, peer=False):
     app, app_argv = _inspect(value["app"]["pid"], until)
     owner, argv = _inspect(value["owner"]["pid"], until)
-    if (app != value["app"] or owner != value["owner"] or not _startup_supported(argv, app_argv)
+    helper = None
+    if "helper" in value:
+        helper, helper_argv = _inspect(value["helper"]["pid"], until)
+        if helper != value["helper"] or not _helper_role_supported(helper_argv):
+            raise NativeError("Desktop wake helper generation changed")
+    if (app != value["app"] or owner != value["owner"]
+            or not _startup_supported(argv, app_argv, bundle=_absolute(value["app_bundle"]), helper=helper)
             or _socket(value["pipe"]["path"]) != value["pipe"]):
         raise NativeError("Desktop wake app, backend or socket generation changed")
     if peer:
@@ -468,7 +553,14 @@ def _signature(path):
     return [facts.st_dev, facts.st_ino, facts.st_size, facts.st_mtime_ns, facts.st_ctime_ns]
 
 
-def _profile(bundle, owner, producer, until):
+def _profile_topology(bundle, profile, helper):
+    if ("helper_relative_path" in profile) != (helper is not None):
+        raise NativeError("Desktop wake process topology disagrees with its qualified app profile")
+    if helper is not None and _helper_profile(bundle, helper) != profile:
+        raise NativeError("Desktop wake helper disagrees with its qualified app profile")
+
+
+def _profile(bundle, owner, producer, until, *, helper=None):
     info_path = bundle / "Contents/Info.plist"
     before = _signature(info_path)
     with info_path.open("rb") as source:
@@ -483,6 +575,7 @@ def _profile(bundle, owner, producer, until):
                     and info.get("CFBundleExecutable") == "ChatGPT"), None)
     if profile is None:
         raise NativeError("Desktop wake app version is not qualified")
+    _profile_topology(bundle, profile, helper)
     paths = [(bundle / "Contents/MacOS/ChatGPT", "app_sha256"),
              (bundle / "Contents/Resources/app.asar", "asar_sha256"),
              (bundle / _OWNER_RELATIVE_PATH, "owner_sha256")]
@@ -490,6 +583,8 @@ def _profile(bundle, owner, producer, until):
         raise NativeError("Desktop wake backend is outside the captured app")
     if producer != paths[2][0]:
         paths.append((bundle / "Contents/Resources/codex-cli/bin/codex", "launcher_sha256"))
+    if helper is not None:
+        paths.append((bundle / profile["helper_relative_path"], "helper_sha256"))
     signatures = {str(info_path): before}
     for path, key in paths:
         initial = _signature(path)
@@ -508,7 +603,7 @@ def verify(identity: NativeIdentity, *, timeout=3):
         bundle = _absolute(value["app_bundle"])
         producer = _absolute(target.get("binary"))
         _recheck(value, until)
-        profile, signatures = _profile(bundle, value["owner"], producer, until)
+        profile, signatures = _profile(bundle, value["owner"], producer, until, helper=value.get("helper"))
         listing = subprocess.run(["/usr/sbin/lsof", "-nP", "-a", "-p", str(value["app"]["pid"]), "-U", "-Fn"],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                  text=True, timeout=files.remaining(until), check=True)
@@ -535,6 +630,9 @@ def wake(session_id, descriptor, *, timeout=3):
         proof = value.get("verification", {})
         if proof.get("profile") not in _PROFILES or not proof.get("files"):
             raise NativeError("Desktop wake requires an outside-hook verified app profile")
+        _profile_topology(_absolute(value["app_bundle"]), proof["profile"], value.get("helper"))
+        if "helper" in value and value["helper"]["executable"] not in proof["files"]:
+            raise NativeError("Desktop wake verification omits its helper executable")
         for name, signature in proof["files"].items():
             if _signature(Path(name)) != signature:
                 raise NativeError("Desktop wake verified application files changed")

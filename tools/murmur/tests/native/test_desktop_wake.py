@@ -20,9 +20,10 @@ from murmur.native.types import NativeError, NativeIdentity
 
 SESSION = "11111111-1111-4111-8111-111111111111"
 REAL_PEER_OWNER = desktop_wake._peer_owner
+QUALIFIED_PROFILES = desktop_wake._PROFILES
 
 
-class DesktopWakeTests(unittest.TestCase):
+class DesktopWakeFixture(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="dw-", dir="/tmp")
         self.addCleanup(temporary.cleanup)
@@ -43,7 +44,7 @@ class DesktopWakeTests(unittest.TestCase):
                                "owner_sha256": self.digest(self.owner),
                                "asar_sha256": self.digest(self.asar),
                                "launcher_sha256": self.digest(self.launcher)}
-                              for profile in desktop_wake._PROFILES)
+                              for profile in QUALIFIED_PROFILES if not profile.get("helper_relative_path"))
         profile = self.profiles[-1]
         self.info = self.bundle / "Contents/Info.plist"
         self.metadata = {"CFBundleIdentifier": profile["bundle_id"],
@@ -102,41 +103,6 @@ class DesktopWakeTests(unittest.TestCase):
             "env": {"HOME": str(self.root), "CODEX_HOME": None, "CODEX_SQLITE_HOME": None}},
             evidence={"desktop_wake": descriptor if descriptor is not None else desktop_wake.capture(self.env)})
 
-    def test_capture_is_deterministic_without_hashing_app_rpc_or_external_commands(self):
-        with patch.object(desktop_wake.files, "executable_sha256", side_effect=AssertionError("capture hashed a file")), \
-                patch.object(socket.socket, "connect", side_effect=AssertionError("capture connected a socket")):
-            first, second = desktop_wake.capture(self.env), desktop_wake.capture(self.env)
-        self.assertEqual(first, second)
-        self.assertEqual((first["owner"]["pid"], first["owner"]["parent_pid"], first["app"]["pid"]),
-                         (201, 301, 301))
-        self.assertEqual(first["pipe"]["path"], str(self.pipe))
-        self.assertTrue(first["domain"]["supported"])
-        self.run.assert_not_called()
-
-    def test_owner_state_requires_positive_backend_end_not_inspection_failure_or_app_only_death(self):
-        identity = self.identity()
-        with patch.object(desktop_wake.os, 'kill', return_value=None):
-            self.assertEqual(desktop_wake.owner_process_state(identity)['status'], 'alive')
-            self.identities[301] = (1, os.getuid(), 'new app birth')
-            state = desktop_wake.owner_process_state(identity)
-            self.assertEqual(state['status'], 'unknown')
-            self.assertEqual(state['components']['app']['status'], 'ended')
-            self.identities[201] = (301, os.getuid(), 'new backend birth')
-            self.assertEqual(desktop_wake.owner_process_state(identity)['status'], 'ended')
-        with patch.object(desktop_wake.os, 'kill', side_effect=PermissionError):
-            self.assertEqual(desktop_wake.owner_process_state(identity)['status'], 'unknown')
-        with patch.object(desktop_wake.os, 'kill', side_effect=ProcessLookupError(3, 'missing')):
-            state = desktop_wake.owner_process_state(identity)
-            self.assertEqual(state['status'], 'ended')
-            self.assertTrue(all(x['status'] == 'ended' for x in state['components'].values()))
-
-    def test_owner_state_missing_evidence_and_failed_process_inspection_stay_unknown(self):
-        self.assertEqual(desktop_wake.owner_process_state(NativeIdentity('codex', SESSION))['status'], 'unknown')
-        identity = self.identity()
-        with patch.object(desktop_wake.os, 'kill', return_value=None), \
-                patch.object(desktop_wake.process, 'identity', side_effect=NativeError('unavailable')):
-            self.assertEqual(desktop_wake.owner_process_state(identity)['status'], 'unknown')
-
     def successor_fixture(self):
         identity = self.identity()
         uid = os.getuid()
@@ -172,6 +138,80 @@ class DesktopWakeTests(unittest.TestCase):
         pipe_patch.start()
         self.addCleanup(pipe_patch.stop)
         return identity
+
+
+class DesktopWakeTests(DesktopWakeFixture):
+    def test_capture_is_deterministic_without_hashing_app_rpc_or_external_commands(self):
+        with patch.object(desktop_wake.files, "executable_sha256", side_effect=AssertionError("capture hashed a file")), \
+                patch.object(socket.socket, "connect", side_effect=AssertionError("capture connected a socket")):
+            first, second = desktop_wake.capture(self.env), desktop_wake.capture(self.env)
+        self.assertEqual(first, second)
+        self.assertEqual((first["owner"]["pid"], first["owner"]["parent_pid"], first["app"]["pid"]),
+                         (201, 301, 301))
+        self.assertEqual(first["pipe"]["path"], str(self.pipe))
+        self.assertTrue(first["domain"]["supported"])
+        self.run.assert_not_called()
+
+    def test_legacy_direct_capture_and_profile_keep_their_frozen_shape(self):
+        captured = desktop_wake.capture(self.env)
+        self.assertEqual(set(captured), {"schema", "kind", "app_bundle", "app", "owner", "pipe",
+                                         "domain", "startup_supported"})
+        self.assertEqual(set(captured["owner"]), {"pid", "parent_pid", "uid", "birth",
+                                                 "executable", "argv_sha256"})
+        verified = desktop_wake.verify(self.identity(captured))
+        self.assertEqual(set(verified["verification"]["profile"]),
+                         {"bundle_id", "version", "build", "app_sha256", "asar_sha256",
+                          "owner_sha256", "launcher_sha256"})
+
+    def test_build29030_requires_direct_parentage_even_when_its_bundle_contains_a_helper(self):
+        profile = next(p for p in self.profiles if p["build"] == "29030")
+        self.info.write_bytes(plistlib.dumps({**self.metadata,
+            "CFBundleShortVersionString": profile["version"], "CFBundleVersion": profile["build"]}))
+        helper = (self.bundle / "Contents/Frameworks/Codex Framework.framework/Versions/157.0.8103.78"
+                  / "Helpers/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)")
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_bytes(b"bundled helper outside the captured backend chain")
+        captured = desktop_wake.capture(self.env)
+        self.assertNotIn("helper", captured)
+        self.assertEqual(captured["owner"]["parent_pid"], captured["app"]["pid"])
+        self.assertTrue(captured["startup_supported"])
+        verified = desktop_wake.verify(self.identity(captured))
+        self.assertEqual(verified["verification"]["profile"], profile)
+        self.assertFalse({"helper_relative_path", "helper_sha256", "launch_cwd_args"} & set(profile))
+        self.assertNotIn(str(helper), verified["verification"]["files"])
+        self.identities[201] = (251, os.getuid(), "owner birth")
+        self.identities[251] = (301, os.getuid(), "utility helper")
+        self.commands[251] = (str(helper), (str(helper), "--type=utility",
+                                           "--utility-sub-type=node.mojom.NodeService",
+                                           "--service-sandbox-type=none"))
+        self.run.reset_mock()
+        with self.assertRaises(NativeError):
+            desktop_wake.capture(self.env)
+        self.run.assert_not_called()
+
+    def test_owner_state_requires_positive_backend_end_not_inspection_failure_or_app_only_death(self):
+        identity = self.identity()
+        with patch.object(desktop_wake.os, 'kill', return_value=None):
+            self.assertEqual(desktop_wake.owner_process_state(identity)['status'], 'alive')
+            self.identities[301] = (1, os.getuid(), 'new app birth')
+            state = desktop_wake.owner_process_state(identity)
+            self.assertEqual(state['status'], 'unknown')
+            self.assertEqual(state['components']['app']['status'], 'ended')
+            self.identities[201] = (301, os.getuid(), 'new backend birth')
+            self.assertEqual(desktop_wake.owner_process_state(identity)['status'], 'ended')
+        with patch.object(desktop_wake.os, 'kill', side_effect=PermissionError):
+            self.assertEqual(desktop_wake.owner_process_state(identity)['status'], 'unknown')
+        with patch.object(desktop_wake.os, 'kill', side_effect=ProcessLookupError(3, 'missing')):
+            state = desktop_wake.owner_process_state(identity)
+            self.assertEqual(state['status'], 'ended')
+            self.assertTrue(all(x['status'] == 'ended' for x in state['components'].values()))
+
+    def test_owner_state_missing_evidence_and_failed_process_inspection_stay_unknown(self):
+        self.assertEqual(desktop_wake.owner_process_state(NativeIdentity('codex', SESSION))['status'], 'unknown')
+        identity = self.identity()
+        with patch.object(desktop_wake.os, 'kill', return_value=None), \
+                patch.object(desktop_wake.process, 'identity', side_effect=NativeError('unavailable')):
+            self.assertEqual(desktop_wake.owner_process_state(identity)['status'], 'unknown')
 
     def test_successor_discovery_preserves_actor_target_and_verifies_owned_default_databases(self):
         identity = self.successor_fixture()
@@ -458,7 +498,8 @@ class DesktopWakeTests(unittest.TestCase):
 
     def test_recent_builds_are_explicitly_supported(self):
         for version, build in (("26.1103.32239", "25471"), ("26.1103.60933", "25894"),
-                               ("26.1106.51428", "26605"), ("26.1111.21308", "27194")):
+                               ("26.1106.51428", "26605"), ("26.1111.21308", "27194"),
+                               ("26.1111.71704", "29030")):
             with self.subTest(build=build):
                 self.info.write_bytes(plistlib.dumps({**self.metadata,
                     "CFBundleShortVersionString": version, "CFBundleVersion": build}))
@@ -582,6 +623,330 @@ class DesktopWakeTests(unittest.TestCase):
         self.identities[301] = (1, os.getuid(), "replacement app")
         self.assertEqual(desktop_wake.wake(SESSION, verified).status, "uncertain")
         self.run.assert_not_called()
+
+
+class DesktopHelperWakeTests(DesktopWakeFixture):
+    def setUp(self):
+        super().setUp()
+        self.direct_profiles = self.profiles
+        profiles = []
+        for qualified in QUALIFIED_PROFILES:
+            if not qualified.get("helper_relative_path"):
+                continue
+            helper = self.bundle / qualified["helper_relative_path"]
+            helper.parent.mkdir(parents=True, exist_ok=True)
+            helper.write_bytes(b"synthetic qualified utility helper")
+            profiles.append({**qualified, "app_sha256": self.digest(self.app),
+                             "owner_sha256": self.digest(self.owner), "asar_sha256": self.digest(self.asar),
+                             "launcher_sha256": self.digest(self.launcher), "helper_sha256": self.digest(helper)})
+        self.profiles = tuple(profiles)
+        profile_patch = patch.object(desktop_wake, "_PROFILES", self.direct_profiles + self.profiles)
+        profile_patch.start()
+        self.addCleanup(profile_patch.stop)
+        self.select_profile(self.profiles[-1])
+
+    def select_profile(self, profile):
+        self.profile = profile
+        self.helper = self.bundle / profile["helper_relative_path"]
+        self.metadata.update(CFBundleShortVersionString=profile["version"], CFBundleVersion=profile["build"])
+        self.info.write_bytes(plistlib.dumps(self.metadata))
+        self.identities[201] = (251, os.getuid(), "owner birth")
+        self.identities[251] = (301, os.getuid(), "helper birth")
+        self.commands[251] = (str(self.helper), (str(self.helper), "--type=utility",
+                                               "--utility-sub-type=node.mojom.NodeService",
+                                               "--service-sandbox-type=none"))
+
+    def launch_cwd_suffix(self):
+        home = str(self.root / ".codex")
+        script = str(self.bundle / "Contents/Resources/cua_node/bin/node_repl")
+        return ("--plugin-mcp-launch-cwd", "unified-computer-use@openai-bundled", "cua_repl", home,
+                "--mcp-launch-cwd", "node_repl", script, home,
+                "--mcp-launch-cwd", "artifact_session", script, home)
+
+    def successor_fixture(self):
+        identity = super().successor_fixture()
+        uid = os.getuid()
+        self.identities[401] = (451, uid, "successor owner")
+        self.identities[451] = (501, uid, "successor helper")
+        self.commands[451] = self.commands[251]
+        self.inventory += f"451 {uid} {self.helper}\n"
+        return identity
+
+    def test_helper_capture_is_deterministic_and_does_not_hash_connect_or_run_commands(self):
+        with patch.object(desktop_wake.files, "executable_sha256", side_effect=AssertionError("capture hashed")), \
+                patch.object(socket.socket, "connect", side_effect=AssertionError("capture connected")):
+            first, second = desktop_wake.capture(self.env), desktop_wake.capture(self.env)
+        self.assertEqual(first, second)
+        self.assertEqual(first["schema"], 1)
+        self.assertEqual((first["owner"]["pid"], first["owner"]["parent_pid"],
+                          first["helper"]["pid"], first["helper"]["parent_pid"], first["app"]["pid"]),
+                         (201, 251, 251, 301, 301))
+        self.assertEqual(set(first["helper"]), {"pid", "parent_pid", "uid", "birth", "executable", "argv_sha256"})
+        self.assertEqual(first["helper"]["executable"], str(self.helper))
+        self.assertTrue(first["startup_supported"])
+        self.assertTrue(first["domain"]["supported"])
+        self.run.assert_not_called()
+
+    def test_build29513_pins_complete_helper_source_and_freezes_its_proof(self):
+        self.assertEqual({profile["build"] for profile in self.profiles}, {"29513"})
+        self.assertEqual(self.profile["helper_relative_path"],
+                         "Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37"
+                         "/Helpers/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)")
+        self.assertIs(self.profile["launch_cwd_args"], True)
+        identity = self.identity()
+        identity = replace(identity, target={**identity.target, "binary": str(self.launcher)})
+        before = deepcopy(identity)
+        verified = desktop_wake.verify(identity)
+        self.assertEqual(identity, before)
+        self.assertEqual(verified["verification"]["profile"], self.profile)
+        self.assertEqual(set(verified["verification"]["files"]),
+                         {str(path) for path in (self.info, self.app, self.asar,
+                                                self.owner, self.helper, self.launcher)})
+        self.run.reset_mock()
+        self.assertEqual(desktop_wake.wake(SESSION, verified).status, "accepted")
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.run.call_args.args[0], ["/usr/bin/open", "-g", "-a", str(self.bundle),
+                                                    "codex://threads/wake/" + SESSION])
+
+    def test_helper_profile_cannot_fall_back_to_other_source_hashes(self):
+        identity = self.identity()
+        identity = replace(identity, target={**identity.target, "binary": str(self.launcher)})
+        for key in ("app_sha256", "asar_sha256", "owner_sha256", "launcher_sha256", "helper_sha256"):
+            profiles = self.direct_profiles + ({**self.profile, key: "f" * 64},)
+            with self.subTest(key=key), patch.object(desktop_wake, "_PROFILES", profiles), \
+                    self.assertRaises(NativeError):
+                desktop_wake.verify(identity)
+
+    def test_helper_descriptor_requires_an_exact_distinct_app_helper_owner_chain(self):
+        captured = desktop_wake.capture(self.env)
+        variants = []
+        missing = deepcopy(captured)
+        missing.pop("helper")
+        variants.append(("missing", missing))
+        for name, key, value in (("malformed", "helper", None),
+                                 ("bundle", "app_bundle", str(self.root / "Other.app"))):
+            changed = deepcopy(captured)
+            changed[key] = value
+            variants.append((name, changed))
+        for name, component, key, value in (
+                ("parent", "helper", "parent_pid", 999), ("owner parent", "owner", "parent_pid", 301),
+                ("wrong helper", "helper", "executable", str(self.root / self.helper.name)),
+                ("wrong app", "app", "executable", str(self.root / "Other.app/Contents/MacOS/ChatGPT")),
+                ("app/helper duplicate", "helper", "pid", 301),
+                ("owner/helper duplicate", "helper", "pid", 201),
+                ("app/owner duplicate", "owner", "pid", 301),
+                ("malformed pid", "helper", "pid", True), ("malformed parent", "helper", "parent_pid", True),
+                ("malformed argv", "helper", "argv_sha256", "bad")):
+            changed = deepcopy(captured)
+            changed[component][key] = value
+            variants.append((name, changed))
+        for name, descriptor in variants:
+            with self.subTest(name=name), self.assertRaises(NativeError):
+                desktop_wake.verify(self.identity(descriptor))
+        self.run.assert_not_called()
+
+    def test_helper_path_cannot_authenticate_a_direct_profile_or_an_extra_hop(self):
+        identity = self.identity()
+        other = next(p for p in self.direct_profiles if p["build"] == "29030")
+        self.info.write_bytes(plistlib.dumps({**self.metadata,
+            "CFBundleShortVersionString": other["version"], "CFBundleVersion": other["build"]}))
+        with self.assertRaises(NativeError):
+            desktop_wake.verify(identity)
+        self.info.write_bytes(plistlib.dumps(self.metadata))
+        self.identities[251] = (275, os.getuid(), "helper birth")
+        worker = str(self.root / "extra-worker")
+        self.identities[275] = (301, os.getuid(), "extra hop")
+        self.commands[275] = (worker, (worker,))
+        self.assertIsNone(desktop_wake.capture(self.env))
+
+    def test_helper_generation_uid_arguments_path_and_file_changes_invalidate_frozen_proof(self):
+        identity = self.identity()
+        verified = desktop_wake.verify(identity)
+        original_identity, original_command = self.identities[251], self.commands[251]
+        variants = (("birth", (301, os.getuid(), "replacement helper"), original_command),
+                    ("uid", (301, os.getuid() + 1, "helper birth"), original_command),
+                    ("argv", original_identity, (str(self.helper), (*original_command[1], "--changed"))),
+                    ("path", original_identity, (str(self.root / self.helper.name), original_command[1])))
+        for name, facts, command in variants:
+            self.identities[251], self.commands[251] = facts, command
+            self.run.reset_mock()
+            with self.subTest(name=name):
+                with self.assertRaises(NativeError):
+                    desktop_wake.verify(identity)
+                self.assertEqual(desktop_wake.wake(SESSION, verified).status, "uncertain")
+                self.run.assert_not_called()
+        self.identities[251], self.commands[251] = original_identity, original_command
+        self.helper.write_bytes(b"changed helper under the same pathname")
+        self.run.reset_mock()
+        with self.assertRaises(NativeError):
+            desktop_wake.verify(identity)
+        self.assertEqual(desktop_wake.wake(SESSION, verified).status, "uncertain")
+        self.run.assert_not_called()
+
+    def test_helper_file_safety_and_hash_read_race_fail_closed(self):
+        identity = self.identity()
+        self.helper.chmod(0o666)
+        with self.assertRaises(NativeError):
+            desktop_wake.verify(identity)
+        self.helper.chmod(0o644)
+        digest = desktop_wake.files.executable_sha256
+        def replace_helper(path, until):
+            result = digest(path, until)
+            if path == self.helper:
+                replacement = self.helper.with_suffix(".replacement")
+                replacement.write_bytes(self.helper.read_bytes())
+                os.replace(replacement, self.helper)
+            return result
+        with patch.object(desktop_wake.files, "executable_sha256", side_effect=replace_helper), \
+                self.assertRaises(NativeError):
+            desktop_wake.verify(identity)
+        self.run.assert_not_called()
+
+    def test_helper_process_generation_race_during_capture_is_an_error(self):
+        calls = []
+        def identity(pid, **options):
+            calls.append(pid)
+            result = self.identities[pid]
+            return (*result[:2], "replacement helper") if pid == 251 and calls.count(pid) > 1 else result
+        with patch.object(desktop_wake.process, "identity", side_effect=identity), self.assertRaises(NativeError):
+            desktop_wake.capture(self.env)
+        self.assertEqual(calls.count(251), 2)
+        self.run.assert_not_called()
+
+    def test_same_helper_binary_requires_its_node_service_role(self):
+        executable, argv = self.commands[251]
+        variants = ((executable,),
+                    (executable, "--type=gpu-process", *argv[2:]),
+                    (executable, argv[1], "--utility-sub-type=network.mojom.NetworkService", argv[3]),
+                    (*argv[:3], "--service-sandbox-type=network"),
+                    (*argv, "--type=utility"))
+        for command in variants:
+            self.commands[251] = (executable, command)
+            with self.subTest(argv=command):
+                captured = desktop_wake.capture(self.env)
+                self.assertFalse(captured["startup_supported"])
+                with self.assertRaises(NativeError):
+                    desktop_wake.verify(self.identity(captured))
+        self.commands[251] = (executable, (*argv, "--lang=en-US"))
+        self.assertTrue(desktop_wake.capture(self.env)["startup_supported"])
+        self.run.assert_not_called()
+
+    def test_helper_or_app_death_alone_does_not_release_the_recorded_owner(self):
+        identity = self.identity()
+        with patch.object(desktop_wake.os, "kill", return_value=None):
+            self.assertEqual(desktop_wake.owner_process_state(identity)["status"], "alive")
+            for pid, component in ((251, "helper"), (301, "app")):
+                original = self.identities[pid]
+                self.identities[pid] = (*original[:2], "replacement generation")
+                with self.subTest(component=component):
+                    state = desktop_wake.owner_process_state(identity)
+                    self.assertEqual(state["status"], "unknown")
+                    self.assertEqual(state["components"][component]["status"], "ended")
+                    self.assertEqual(state["components"]["owner"]["status"], "alive")
+                self.identities[pid] = original
+            self.identities[201] = (251, os.getuid(), "replacement backend")
+            self.assertEqual(desktop_wake.owner_process_state(identity)["status"], "ended")
+
+    def test_only_build29513_accepts_the_complete_ordered_launch_cwd_suffix(self):
+        executable, base = self.commands[201]
+        suffix = self.launch_cwd_suffix()
+        direct = next(p for p in self.direct_profiles if p["build"] == "29030")
+        for profile in (direct, self.profile):
+            self.metadata.update(CFBundleShortVersionString=profile["version"], CFBundleVersion=profile["build"])
+            self.info.write_bytes(plistlib.dumps(self.metadata))
+            self.identities[201] = (301 if profile == direct else 251, os.getuid(), "owner birth")
+            for tail in ((), suffix):
+                self.commands[201] = (executable, base + tail)
+                with self.subTest(build=profile["build"], suffix=bool(tail)):
+                    captured = desktop_wake.capture(self.env)
+                    accepted = not tail or profile["build"] == "29513"
+                    self.assertEqual(captured["startup_supported"], accepted)
+                    if accepted:
+                        self.assertEqual(desktop_wake.verify(self.identity(captured))["verification"]["profile"], profile)
+                    else:
+                        with self.assertRaises(NativeError):
+                            desktop_wake.verify(self.identity(captured))
+
+    def test_partial_reordered_or_modified_launch_cwd_suffixes_stay_unsupported(self):
+        executable, base = self.commands[201]
+        suffix = self.launch_cwd_suffix()
+        variants = [("truncated " + str(length), suffix[:length]) for length in range(1, len(suffix))]
+        variants += [("reordered", suffix[4:8] + suffix[:4] + suffix[8:]),
+                     ("duplicate", suffix + suffix[:4]), ("trailing option", suffix + ("--remote",))]
+        for index in (1, 2, 3, 5, 6, 7, 9, 10, 11):
+            changed = list(suffix)
+            changed[index] += "-other"
+            variants.append(("modified " + str(index), tuple(changed)))
+        for name, tail in variants:
+            self.commands[201] = (executable, base + tail)
+            with self.subTest(name=name):
+                captured = desktop_wake.capture(self.env)
+                self.assertFalse(captured["startup_supported"])
+                with self.assertRaises(NativeError):
+                    desktop_wake.verify(self.identity(captured))
+        self.run.assert_not_called()
+
+    def test_launch_cwd_suffix_does_not_qualify_direct_or_unknown_topology(self):
+        executable, base = self.commands[201]
+        self.commands[201] = (executable, base + self.launch_cwd_suffix())
+        self.identities[201] = (301, os.getuid(), "owner birth")
+        captured = desktop_wake.capture(self.env)
+        self.assertIsNotNone(captured)
+        self.assertFalse(captured["startup_supported"])
+        with self.assertRaises(NativeError):
+            desktop_wake.verify(self.identity(captured))
+        self.identities[201] = (251, os.getuid(), "owner birth")
+        self.commands[251] = (str(self.root / self.helper.name), (str(self.root / self.helper.name),))
+        with self.assertRaises(NativeError):
+            desktop_wake.capture(self.env)
+
+    def test_helper_startup_keeps_config_userdata_and_custom_domain_restrictions(self):
+        original = dict(self.commands)
+        for pid, tail in ((201, ("-c", 'sqlite_home="/other"')), (201, ("--remote", "other")),
+                          (301, ("--user-data-dir=/other",))):
+            self.commands = dict(original)
+            executable, argv = self.commands[pid]
+            self.commands[pid] = (executable, argv + tail)
+            with self.subTest(pid=pid, tail=tail):
+                captured = desktop_wake.capture(self.env)
+                self.assertFalse(captured["startup_supported"])
+                with self.assertRaises(NativeError):
+                    desktop_wake.verify(self.identity(captured))
+        self.commands = original
+        for name in ("HOME", "CODEX_HOME", "CODEX_SQLITE_HOME", "CODEX_ELECTRON_USER_DATA_PATH"):
+            with self.subTest(env=name):
+                captured = desktop_wake.capture({**self.env, name: str(self.root / "other")})
+                self.assertFalse(captured["domain"]["supported"])
+                with self.assertRaises(NativeError):
+                    desktop_wake.verify(self.identity(captured))
+        self.run.assert_not_called()
+
+    def test_helper_successor_excludes_remote_backend_and_requires_one_local_chain(self):
+        identity = self.successor_fixture()
+        self.identities[601] = (501, os.getuid(), "remote backend")
+        self.commands[601] = (str(self.owner), (str(self.owner), "app-server", "--remote", "host"))
+        self.inventory += f"601 {os.getuid()} {self.owner}\n"
+        successor = desktop_wake.discover_successor(identity)
+        captured = successor.evidence["desktop_wake"]
+        self.assertEqual((captured["owner"]["pid"], captured["helper"]["pid"], captured["app"]["pid"]),
+                         (401, 451, 501))
+        self.assertEqual(captured["verification"]["profile"], self.profile)
+        self.assertEqual(successor.target, identity.target)
+        self.assertEqual(set(captured["database_files"]), {str(path) for path in self.database_paths})
+        self.identities[601] = (651, os.getuid(), "second local backend")
+        self.identities[651] = (501, os.getuid(), "second local helper")
+        self.commands[601], self.commands[651] = self.commands[401], self.commands[451]
+        self.inventory += f"651 {os.getuid()} {self.helper}\n"
+        with self.assertRaisesRegex(NativeError, "eligible backend.*ambiguous"):
+            desktop_wake.discover_successor(identity)
+        self.assertFalse(any(call.args[0][0] == "/usr/bin/open" for call in self.run.call_args_list))
+
+    def test_helper_successor_still_requires_the_history_database_handle(self):
+        identity = self.successor_fixture()
+        self.owner_files = "\n".join(f"f{i}\nD{hex(path.stat().st_dev)}\ni{path.stat().st_ino}\nn{path}"
+                                     for i, path in enumerate(self.database_paths[:-1]))
+        with self.assertRaisesRegex(NativeError, "safe default native databases: thread_history"):
+            desktop_wake.discover_successor(identity)
 
 
 if __name__ == "__main__":
