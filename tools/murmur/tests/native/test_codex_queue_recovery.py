@@ -23,6 +23,8 @@ SHA_ALPHA6 = '508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44'
 SHA_0167 = 'a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e'
 SHA_0167_ALPHA4 = '7cb8700a47be3c81bb3c5efbf2d2adc716ce3db4806e9dc992f2925f78b2b194'
 SHA_0169 = '3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b'
+SHA_0169_STABLE = 'f69d8040091fc4997fb37e7f5ada428ec2fd06656b66ff5a72b31e12e0e67c20'
+SHA_0171 = '3b6d00deea5fabc50ad34be1872b8e4ead1638d23c68fabb7837edc07f0cf1e0'
 
 
 class _StoreFixture(unittest.TestCase):
@@ -144,6 +146,29 @@ class IdlePreparationTests(_StoreFixture):
                     with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
                         recovery.prepare_idle_target(self.identity)
 
+    def test_helper_changes_cannot_use_closed_history_exception(self):
+        _, listing = self.closed_history_files()
+        helper = {'pid': 301, 'birth': 'frozen helper'}
+        for previous, current in (({}, {'helper': helper}), ({'helper': helper}, {}),
+                                  ({'helper': helper}, {'helper': {**helper, 'birth': 'new helper'}}),
+                                  ({}, {'helper': None})):
+            with self.subTest(previous=previous, current=current):
+                frozen = {**self.descriptor, **previous}
+                actor = replace(self.identity, evidence={**self.identity.evidence, 'desktop_wake': frozen})
+                self.verify.return_value = {**self.descriptor, **current}
+                with patch.object(recovery.desktop_wake, '_database_files', wraps=REAL_DATABASE_FILES), \
+                        patch.object(recovery.desktop_wake, '_listing', return_value=listing):
+                    with self.assertRaisesRegex(NativeError, 'safe default native databases: thread_history'):
+                        recovery.prepare_idle_target(actor)
+
+    def test_frozen_capture_preserves_optional_helper_without_changing_legacy_shape(self):
+        legacy = recovery._capture(self.descriptor)
+        helper = {'pid': 301, 'birth': 'frozen helper'}
+        current = recovery._capture({**self.descriptor, 'helper': helper})
+        self.assertNotIn('helper', legacy)
+        self.assertEqual(current, {**legacy, 'helper': helper})
+        self.assertNotEqual(current, recovery._capture({**self.descriptor, 'helper': {**helper, 'pid': 401}}))
+
     def test_healthy_owner_readonly_metadata_preserves_session_parent_target_and_provenance(self):
         original = deepcopy(self.identity)
         before = self.database.read_bytes(), self.rollout.read_bytes()
@@ -212,14 +237,15 @@ class IdlePreparationTests(_StoreFixture):
     def test_header_creator_does_not_substitute_for_the_verified_append_owner(self):
         version = {SHA_ALPHA5: '0.166.0-alpha.5.1', SHA_ALPHA6: '0.166.0-alpha.6',
                    SHA_0167: '0.167.0-alpha.3.2', SHA_0167_ALPHA4: '0.167.0-alpha.4.1',
-                   SHA_0169: '0.169.0-alpha.11.1'}[self.owner_sha]
+                   SHA_0169: '0.169.0-alpha.11.1', SHA_0169_STABLE: '0.169.1',
+                   SHA_0171: '0.171.0-alpha.13'}[self.owner_sha]
         self.header['payload']['cli_version'] = version
         self.write_header()
         self.assertEqual(recovery.prepare_idle_target(self.identity).session_id, SESSION)
         self.header['payload']['cli_version'] = (
-            '0.166.0-alpha.5.1' if self.owner_sha in (SHA_ALPHA6, SHA_0167, SHA_0167_ALPHA4, SHA_0169) else '0.166.0-alpha.6')
+            '0.166.0-alpha.5.1' if self.owner_sha in (SHA_ALPHA6, SHA_0167, SHA_0167_ALPHA4, SHA_0169, SHA_0169_STABLE, SHA_0171) else '0.166.0-alpha.6')
         self.write_header()
-        if self.owner_sha in (SHA_ALPHA6, SHA_0167, SHA_0167_ALPHA4, SHA_0169):
+        if self.owner_sha in (SHA_ALPHA6, SHA_0167, SHA_0167_ALPHA4, SHA_0169, SHA_0169_STABLE, SHA_0171):
             before = self.rollout.read_bytes()
             result = recovery.prepare_idle_target(self.identity)
             self.assertEqual(result.session_id, SESSION)
@@ -319,6 +345,23 @@ class RetainedQueueTests(_StoreFixture):
 
     def probe(self):
         return recovery.probe_idle_recovery(self.identity, self.attempt, state_root=self.state)
+
+    def test_original_handoff_binds_optional_helper_presence_and_generation(self):
+        helper = {'pid': 701, 'birth': 'original helper'}
+        for original, changed in (({}, {'helper': helper}), ({'helper': helper}, {}),
+                                  ({'helper': helper}, {'helper': {**helper, 'birth': 'different helper'}})):
+            with self.subTest(original=original, changed=changed):
+                identity = replace(self.identity, evidence={**self.identity.evidence,
+                    'desktop_wake': {**self.descriptor, **original}})
+                attempt = deepcopy(self.attempt)
+                attempt['native_identity'] = asdict(identity)
+                attempt['emission']['native']['desktop'] = {**self.emission['native']['desktop'], **changed}
+                frozen = deepcopy(attempt)
+                result = recovery.probe_idle_recovery(identity, attempt, state_root=self.state)
+                self.assertEqual(result['status'], 'held')
+                self.assertIn('Original Desktop qualification differs', result['reason'])
+                self.assertEqual(attempt, frozen)
+                self.discover.assert_not_called()
 
     def test_exact_retained_row_can_only_wake_same_id_after_fresh_probe_and_callback(self):
         raw = self.enqueue()
@@ -510,6 +553,22 @@ class Codex0169IdlePreparationTests(Codex0167IdlePreparationTests):
 
 class Codex0169RetainedQueueTests(Codex0167RetainedQueueTests):
     owner_sha = SHA_0169
+
+
+class Codex0169StableIdlePreparationTests(Codex0169IdlePreparationTests):
+    owner_sha = SHA_0169_STABLE
+
+
+class Codex0169StableRetainedQueueTests(Codex0169RetainedQueueTests):
+    owner_sha = SHA_0169_STABLE
+
+
+class Codex0171IdlePreparationTests(Codex0169IdlePreparationTests):
+    owner_sha = SHA_0171
+
+
+class Codex0171RetainedQueueTests(Codex0169RetainedQueueTests):
+    owner_sha = SHA_0171
 
 
 class GateTests(_StoreFixture):

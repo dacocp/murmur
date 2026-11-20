@@ -162,6 +162,25 @@ class BusyRuntimeTests(unittest.TestCase):
         self.assertIsNone(self.ledger.active_turn(self.actor))
         self.assertEqual(self.ledger.attempts(self.actor), [])
 
+    def test_tool_cwd_exception_keeps_helper_presence_and_generation_bound(self):
+        tool = self.desktop_turn()
+        helper = {'pid': 301, 'birth': 'helper generation'}
+        current = asdict(tool)
+        enrolled = self.ledger.actor(self.actor)['identity']
+        active = self.ledger.active_turn(self.actor)
+        self.assertIsNotNone(hooks._post_tool_turn_target(current, enrolled, active, self.binding, TURN))
+        current['evidence']['desktop_wake']['helper'] = helper
+        self.assertIsNone(hooks._post_tool_turn_target(current, enrolled, active, self.binding, TURN))
+        active = deepcopy(active)
+        active['identity']['evidence']['desktop_wake']['helper'] = helper
+        self.assertIsNotNone(hooks._post_tool_turn_target(current, enrolled, active, self.binding, TURN))
+        for changed in (None, {**helper, 'birth': 'changed helper'}, {**helper, 'pid': 401}):
+            current['evidence']['desktop_wake']['helper'] = changed
+            with self.subTest(helper=changed):
+                self.assertIsNone(hooks._post_tool_turn_target(current, enrolled, active, self.binding, TURN))
+        del current['evidence']['desktop_wake']['helper']
+        self.assertIsNone(hooks._post_tool_turn_target(current, enrolled, active, self.binding, TURN))
+
     def test_tool_cwd_exception_keeps_receipt_failures_quiet_and_new_submit_routes_explicit(self):
         tool = self.desktop_turn()
         active, enrolled = self.ledger.active_turn(self.actor), self.ledger.actor(self.actor)

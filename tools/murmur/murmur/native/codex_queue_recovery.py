@@ -30,6 +30,8 @@ _OWNER_SHAS = frozenset({
     'a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e',
     '7cb8700a47be3c81bb3c5efbf2d2adc716ce3db4806e9dc992f2925f78b2b194',
     '3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b',
+    'f69d8040091fc4997fb37e7f5ada428ec2fd06656b66ff5a72b31e12e0e67c20',
+    '3b6d00deea5fabc50ad34be1872b8e4ead1638d23c68fabb7837edc07f0cf1e0',
 })
 _KIND = 'codex-idle-handoff-v1'
 _ORDINARY_SOURCE = {'cli': 'cli', 'vscode': 'vscode', 'exec': 'exec', 'appServer': 'mcp'}
@@ -75,8 +77,11 @@ def _base_identity(identity):
 
 
 def _capture(descriptor):
-    return {name: descriptor[name] for name in
-            ('schema', 'kind', 'app_bundle', 'app', 'owner', 'pipe', 'domain', 'startup_supported')}
+    result = {name: descriptor[name] for name in
+              ('schema', 'kind', 'app_bundle', 'app', 'owner', 'pipe', 'domain', 'startup_supported')}
+    if 'helper' in descriptor:
+        result['helper'] = descriptor['helper']
+    return result
 
 
 def _installation_binding(installation):
@@ -584,8 +589,7 @@ def prepare_idle_target(identity, *, timeout=3):
             # A verified unchanged owner may close its history connection while idle.
             # Fresh claims still pin its queue/state FDs and all three safe paths.
             frozen = identity.evidence['desktop_wake']
-            require_history_handle = any(descriptor[key] != frozen[key]
-                                         for key in ('app', 'owner', 'pipe', 'domain'))
+            require_history_handle = _capture(descriptor) != _capture(frozen)
         except NativeError:
             state = desktop_wake.owner_process_state(identity, timeout=files.remaining(until))
             if state['status'] != 'ended':

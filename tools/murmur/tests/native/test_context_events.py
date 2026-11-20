@@ -21,6 +21,8 @@ SHA_0166 = fixtures.SHA_0166
 SHA_0167 = fixtures.SHA_0167
 SHA_0167_ALPHA4 = fixtures.SHA_0167_ALPHA4
 SHA_0169 = fixtures.SHA_0169
+SHA_0169_STABLE = fixtures.SHA_0169_STABLE
+SHA_0171 = fixtures.SHA_0171
 stored_schema1_capture = fixtures.stored_schema1_capture
 
 
@@ -182,6 +184,12 @@ class EventReceiptTests(unittest.TestCase):
 
     def test_0169_writer_keeps_event_contract_and_frozen_older_profile(self):
         self.assert_qualified_writer(SHA_0169, '0.169.0-alpha.11.1')
+
+    def test_0169_stable_writer_keeps_event_contract_and_frozen_older_profile(self):
+        self.assert_qualified_writer(SHA_0169_STABLE, '0.169.1')
+
+    def test_0171_writer_keeps_event_contract_and_frozen_older_profile(self):
+        self.assert_qualified_writer(SHA_0171, '0.171.0-alpha.13')
 
     def assert_qualified_writer(self, sha256, version):
         previous = self.attempt()

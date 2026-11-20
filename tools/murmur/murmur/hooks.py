@@ -90,6 +90,8 @@ def _post_tool_turn_target(identity, enrolled, active, binding, turn_key):
     fields = ("schema", "kind", "app_bundle", "app", "owner", "pipe", "domain", "startup_supported")
     if (not isinstance(current, dict) or not isinstance(previous, dict)
             or any(key not in current or key not in previous or current[key] != previous[key] for key in fields)
+            or ('helper' in current, current.get('helper')) != ('helper' in previous, previous.get('helper'))
+            or ('helper' in current and not isinstance(current['helper'], dict))
             or type(current["schema"]) is not int or current["schema"] != 1
             or current["kind"] != "codex-desktop-deep-link-v1" or current["startup_supported"] is not True
             or any(not isinstance(current[key], dict) for key in ("app", "owner", "pipe", "domain"))
