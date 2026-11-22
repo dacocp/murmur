@@ -79,20 +79,16 @@ The macOS Codex profiles pin these backend bytes:
 Earlier profiles retain their measured creation-header pairs. The exact alpha6
 and 0.167 alpha3.2/alpha4.1, 0.169 alpha11.1/0.169.1 and 0.171 alpha13 writers accept structurally valid historical headers, treating the
 creator version as diagnostic metadata; their schema2 receipts verify a bounded
-new-event window rather than the historical middle. Desktop wake checks select a complete application profile, including
-version, build, app, archive, backend and launcher hashes; profiles cannot mix.
-The profiles include ChatGPT 26.1023.51421/build22530, 26.1027.30824/build22943,
-26.1027.51404/build23880, 26.1027.61615/build24141, 26.1029.61003/build24614,
-26.1103.32239/build25471, 26.1103.60933/build25894, 26.1106.51428/build26605 and
-26.1111.21308/build27194, 26.1111.71704/build29030 and
-26.1117.31558/build29513. Build29030 remains direct app-to-backend;
-build29513 requires its pinned NodeService utility helper between app and backend.
-Its exact ordered built-in MCP launch-CWD suffix does not authorize other startup
-arguments or native configuration homes. Optional helper evidence is frozen in
-new proofs; legacy direct descriptors retain their original shape.
-Build 24614 changes the backend to alpha6 while preserving the strict wake-only
-URL and nonempty-queue resume contract. Fresh recipient preparation validates
-the creation header against the actual verified backend. Retained-input recovery
+new-event window rather than the historical middle. Desktop wake no longer
+uses a release registry. It verifies the observed app identity, process chain,
+NodeService helper role/path, default native domain, owned socket and current
+file generations. Build labels and file hashes are frozen observations, not
+permission to attempt delivery. A new framework version at the same structural
+helper location is accepted. The complete ordered built-in MCP launch-CWD suffix
+still requires its expected scripts and default home.
+Fresh idle delivery can use an unfamiliar writer without certifying its private
+history format. Known writers retain exact recipient/header validation and
+optional restart qualification. Retained-input recovery
 still requires the exact original Desktop profile; a new engine or changed
 protected runtime never retroactively qualifies an old handoff. Capture,
 admission, unloaded wake and restart require their separate native evidence.

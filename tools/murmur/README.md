@@ -631,16 +631,19 @@ supported historical header structure and treats the creator version as bounded,
 nonempty printable metadata. It still requires both exact recipient IDs,
 paginated mode and a valid starting ordinal; current-writer certification,
 canonical path, frozen-prefix and modern provenance checks are unchanged.
-Earlier profiles retain their measured creation-version pairs. The Desktop wake
-profiles include ChatGPT 26.1103.32239/build 25471 and 26.1103.60933/build 25894
-with 0.167.0-alpha.3.2, 26.1106.51428/build 26605 with 0.167.0-alpha.4.1,
-26.1111.21308/build 27194 with 0.169.0-alpha.11.1,
-26.1111.71704/build 29030 with 0.169.1, and
-26.1117.31558/build 29513 with 0.171.0-alpha.13.
-Each pins exact engine, app, ASAR and launcher bytes; changed bytes remain unsupported.
-Build 29513 additionally pins its NodeService helper and the exact
-app-to-helper-to-backend chain; build 29030 retains the direct backend route.
-The measured built-in MCP launch-CWD suffix is accepted only for build 29513.
+Earlier event-reader profiles retain their measured creation-version pairs.
+Desktop idle delivery does not require an app-build or source-hash allowlist.
+It verifies the actual local app identity, direct or NodeService-helper process
+chain, default native domain and main-app-owned wake socket. Version/build labels
+and current app/archive/backend/launcher/helper hashes are observations frozen
+for that attempt. New labels or bytes alone do not prevent a fresh queue/wake;
+a changed process, source generation or socket invalidates an existing proof.
+Helper framework versions are discovered within the captured app. The exact
+built-in MCP launch-CWD suffix retains its structural/default-home checks.
+An unfamiliar backend writer can still receive an ordinary one-shot attempt;
+busy receipt parsing and private-history restart recovery require their own
+supported formats. Actual transport errors remain visible and do not authorize
+reposting a possibly queued notification. Scheduling a wake is not model admission.
 Saved attempts keep their original profiles. Header inspection
 alone does not prove native resume or whole-history compatibility. Without a trusted exact
 transcript path, `doctor` reports history compatibility as unverified even

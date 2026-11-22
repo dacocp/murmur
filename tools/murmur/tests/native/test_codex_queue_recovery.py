@@ -287,7 +287,7 @@ class IdlePreparationTests(_StoreFixture):
         with self.assertRaisesRegex(NativeError, 'cwd differs'):
             recovery.prepare_idle_target(self.identity)
 
-    def test_unqualified_successor_cannot_refresh_or_create_persisted_thread_proof(self):
+    def test_unfamiliar_successor_can_attempt_delivery_without_certifying_private_history(self):
         descriptor = deepcopy(self.descriptor)
         descriptor['owner'] = {'pid': 401, 'birth': 'new backend'}
         descriptor['verification']['profile']['owner_sha256'] = 'f' * 64
@@ -295,8 +295,12 @@ class IdlePreparationTests(_StoreFixture):
         self.verify.side_effect = NativeError('old owner ended')
         self.discover.return_value = successor
         original = deepcopy(self.identity)
-        with self.assertRaisesRegex(NativeError, 'not a qualified idle profile'):
-            recovery.prepare_idle_target(self.identity)
+        prepared = recovery.prepare_idle_target(self.identity)
+        self.assertEqual(prepared, successor)
+        self.assertNotIn('codex_idle_thread', prepared.evidence)
+        successor = replace(successor, evidence={**successor.evidence, 'codex_idle_thread': {'old': 'proof'}})
+        self.discover.return_value = successor
+        self.assertNotIn('codex_idle_thread', recovery.prepare_idle_target(self.identity).evidence)
         with self.assertRaisesRegex(NativeError, 'qualified Desktop backend profile'):
             recovery._persisted_thread(successor, descriptor, recovery.files.deadline(3))
         self.assertEqual(self.identity, original)

@@ -568,10 +568,10 @@ def _persisted_thread(identity, descriptor, until):
 def prepare_idle_target(identity, *, timeout=3):
     """Verify the same actor's actual owner for a *new*, separately fenced claim.
 
-    Current healthy legacy routes retain their ordinary one-shot behavior. Only
-    the measured Desktop default-domain profiles may refresh a positively ended
-    backend. Its native thread metadata and creation header are read without
-    changing session/parent/target or inventing app-server source provenance.
+    Current healthy legacy routes retain ordinary one-shot behavior. A verified
+    default-domain Desktop may refresh a positively ended backend. Known event
+    writers also validate native thread/header evidence for optional recovery;
+    unfamiliar writers can still attempt delivery without certifying that format.
     """
     try:
         until = files.deadline(timeout)
@@ -597,9 +597,10 @@ def prepare_idle_target(identity, *, timeout=3):
             candidate = desktop_wake.discover_successor(identity, timeout=files.remaining(until))
             descriptor = candidate.evidence['desktop_wake']
         if descriptor['verification']['profile']['owner_sha256'] not in _OWNER_SHAS:
-            if candidate.evidence['desktop_wake']['owner'] != identity.evidence['desktop_wake']['owner']:
-                raise NativeError('Desktop successor backend is not a qualified idle profile')
-            return candidate
+            # An unfamiliar writer can still receive one ordinary queue/wake
+            # attempt. Its private history format is not certified for recovery.
+            return replace(candidate, evidence={key: value for key, value in candidate.evidence.items()
+                                                if key != 'codex_idle_thread'})
         databases = desktop_wake._database_files(descriptor['owner'], descriptor['domain'], until,
                                                  require_history_handle=require_history_handle)
         proof = _persisted_thread(candidate, descriptor, until)
