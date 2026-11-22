@@ -28,98 +28,6 @@ from .types import DeliveryResult, NativeError, NativeIdentity, validate_session
 
 _PIPE_ENV = "CODEX_APP_TOOLS_PIPE_PATH"
 _TOOLS_DIRECTORY = "/tmp/codex-app-tools"
-_PROFILES = ({
-    "bundle_id": "com.openai.codex",
-    "version": "26.1023.51421",
-    "build": "22530",
-    "app_sha256": "44342669fea068c3d335eff7cc40ee110b34fa4ff3570bb03cc507bd73fe980d",
-    "asar_sha256": "1c8ef1bef66e5fc416ae66eff8e6529972aa3601e27a1c7b5f61d6a292b957d3",
-    "owner_sha256": "d84a54b031085f01e3ad915ea7c72ebea4dcf69e90f0d1e0e4a637e8280991d2",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1027.30824",
-    "build": "22943",
-    "app_sha256": "df23c13298327375ad613bb43d69dab6706591898a026e223316763b0ad7b069",
-    "asar_sha256": "36bf3d2b35e95e11852074b9ca9459b89efbecd6b8311345d060cf66de8f0ba6",
-    "owner_sha256": "58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1027.51404",
-    "build": "23880",
-    "app_sha256": "0c1cb804f8858c8ab059a26a1640b9a66c9a5071c48f39d6618e8698da370b56",
-    "asar_sha256": "52e0a65f9fea51f4287bbd98c63343761f9424517bb793652bb554764bc0bcc8",
-    "owner_sha256": "58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1027.61615",
-    "build": "24141",
-    "app_sha256": "b3783838c86c3124d4b0fd5fa5c2d2fca327b4b4f52c7c7c369df25cfa879509",
-    "asar_sha256": "bb88615052255e79b5977885f9a0cc212c268589587c79d4d3b7c4b46e881a95",
-    "owner_sha256": "58a91f6ea19bea477ae3a2ec48d619f0039afe75d3476260747e11d201fa7cea",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1029.61003",
-    "build": "24614",
-    "app_sha256": "e25946854a71aa4ccc6d5dc3d28b22e65c6882bfc28fbb3f10dc809e262b865d",
-    "asar_sha256": "0c951258b7ab381ec601045ffb02159e53f424548dda18e6a4dcfd126557383b",
-    "owner_sha256": "508388df35319042107560d095b271a98a512f59a542848c908b23ed1bad4b44",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1103.32239",
-    "build": "25471",
-    "app_sha256": "3f5c9ea81862517e14a3b63e5cb988e6d7b171c77acd0b472b40f2519906ffaa",
-    "asar_sha256": "8e55cbc7f0b7797ca1972cbf6d8b37f26dd8b79d0613235bc7448905a3bc7a2b",
-    "owner_sha256": "a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1103.60933",
-    "build": "25894",
-    "app_sha256": "75d42141ee272cd9a3905b04a2009318fa89730becfd8e8af840f5d994f907ad",
-    "asar_sha256": "a77588b2dcfa9b394d722dd8c2c8b13d3a09bacd49c839cc715245742dba6048",
-    "owner_sha256": "a636331ed87605efc4cf84028ac2884a75363f9d10ead63cffb57ea0016d486e",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1106.51428",
-    "build": "26605",
-    "app_sha256": "7efa7738eb06887f95f3b915c085a7a228c437119a1fedaaa7d01c92687cff78",
-    "asar_sha256": "3695c17edcab8d66c1e5f2faa03e07826a59a39bf78b369ec87854547d4843c1",
-    "owner_sha256": "7cb8700a47be3c81bb3c5efbf2d2adc716ce3db4806e9dc992f2925f78b2b194",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1111.21308",
-    "build": "27194",
-    "app_sha256": "7f12ca78e61eaf7b4ed6439de80f5848182c08b64552d87979fbfa57a07c099f",
-    "asar_sha256": "64782f30d783c24eb483e92f9a2e884ada6d24dc105fc27659ba16e073da145c",
-    "owner_sha256": "3ea20787e106af94573d3d6c19480aed93a1334b0dd32b6b04e2f780ce82cf4b",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1111.71704",
-    "build": "29030",
-    "app_sha256": "2ab4ecacdc858968d59b5c2663b420b9c1bc2bc9224a5c196068ce1132e86ca7",
-    "asar_sha256": "10efb2dd0d46bdc11efe687fbb5cc8cdb89dd4f3be24c509f5c9a18fec13f37a",
-    "owner_sha256": "f69d8040091fc4997fb37e7f5ada428ec2fd06656b66ff5a72b31e12e0e67c20",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-}, {
-    "bundle_id": "com.openai.codex",
-    "version": "26.1117.31558",
-    "build": "29513",
-    "app_sha256": "ab12fa487670db87849e6a6565b70e97b927f5d860e175a34f82aeef94975167",
-    "asar_sha256": "97f9f40a31a1512cca57c0e06fedc568642a8f84a10abc637d96ffeca3f5e6ac",
-    "owner_sha256": "3b6d00deea5fabc50ad34be1872b8e4ead1638d23c68fabb7837edc07f0cf1e0",
-    "launcher_sha256": "50ab38ba21d0d9f8346f32f41848382f15b556190f3c7a07e885a4fb73e379c8",
-    "helper_relative_path": "Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)",
-    "helper_sha256": "1cb1d968da97de4211d84eae06117eca08d8add072ad610f649b1d2df99e5781",
-    "launch_cwd_args": True,
-})
 _KIND = "codex-desktop-deep-link-v1"
 _OWNER_RELATIVE_PATH = "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
 _CONFIG_OVERRIDES = {
@@ -236,8 +144,9 @@ def discover_successor(identity, *, timeout=3):
         bundle = _absolute(original["app_bundle"])
         expected = {"app": {str(bundle / "Contents/MacOS/ChatGPT")},
                     "owner": {str(bundle / _OWNER_RELATIVE_PATH)},
-                    "helper": {str(bundle / profile["helper_relative_path"]) for profile in _PROFILES
-                               if "helper_relative_path" in profile}}
+                    "helper": {str(path.resolve(strict=True)) for path in bundle.glob(
+                        "Contents/Frameworks/Codex Framework.framework/Versions/*/Helpers/"
+                        "Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)")}}
         candidates = {kind: [] for kind in expected}
         rows = _listing(["/bin/ps", "-axo", "pid=,uid=,comm="], until)
         if len(rows) > 16_384:
@@ -370,14 +279,14 @@ def _peer_owner(value, until):
     files.remaining(until)
 
 
-def _helper_profile(bundle, helper):
-    path = Path(helper["executable"])
-    profile = next((profile for profile in _PROFILES
-                    if "helper_relative_path" in profile
-                    and path == bundle / profile["helper_relative_path"]), None)
-    if profile is None or path != _absolute(str(path)):
-        raise NativeError("Desktop wake helper is outside a qualified captured app path")
-    return profile
+def _helper_relative_path(bundle, helper):
+    path = _absolute(helper["executable"])
+    relative = path.relative_to(bundle)
+    parts = relative.parts
+    if (len(parts) != 10 or parts[:4] != ("Contents", "Frameworks", "Codex Framework.framework", "Versions")
+            or parts[5:] != ("Helpers", "Codex (Aperitif).app", "Contents", "MacOS", "Codex (Aperitif)")):
+        raise NativeError("Desktop wake helper is outside its captured app framework")
+    return str(relative)
 
 
 def _helper_role_supported(argv):
@@ -392,15 +301,14 @@ def _startup_supported(argv, app_argv, *, bundle=None, helper=None):
         return False
     args, index, server = list(argv[1:]), 0, 0
     if helper is not None:
-        profile = _helper_profile(bundle, helper)
-        if profile.get("launch_cwd_args") is True:
-            home = str(Path(pwd.getpwuid(os.getuid()).pw_dir).resolve() / ".codex")
-            node = str(bundle / "Contents/Resources/cua_node/bin/node_repl")
-            suffix = ["--plugin-mcp-launch-cwd", "unified-computer-use@openai-bundled", "cua_repl", home,
-                      "--mcp-launch-cwd", "node_repl", node, home,
-                      "--mcp-launch-cwd", "artifact_session", node, home]
-            if args[-len(suffix):] == suffix:
-                args = args[:-len(suffix)]
+        _helper_relative_path(bundle, helper)
+        home = str(Path(pwd.getpwuid(os.getuid()).pw_dir).resolve() / ".codex")
+        node = str(bundle / "Contents/Resources/cua_node/bin/node_repl")
+        suffix = ["--plugin-mcp-launch-cwd", "unified-computer-use@openai-bundled", "cua_repl", home,
+                  "--mcp-launch-cwd", "node_repl", node, home,
+                  "--mcp-launch-cwd", "artifact_session", node, home]
+        if args[-len(suffix):] == suffix:
+            args = args[:-len(suffix)]
     while index < len(args):
         value = args[index]
         if value in {"-c", "--config"} and index + 1 < len(args):
@@ -450,7 +358,7 @@ def _capture(env, timeout):
         if Path(owner["executable"]) != bundle / _OWNER_RELATIVE_PATH:
             return None
         if helper is not None:
-            _helper_profile(bundle, helper)
+            _helper_relative_path(bundle, helper)
             if len({app["pid"], helper["pid"], owner["pid"]}) != 3:
                 raise NativeError("Desktop wake process chain repeats a PID")
         result = {"schema": 1, "kind": _KIND, "app_bundle": str(bundle),
@@ -498,7 +406,7 @@ def _descriptor(value):
     if len({value[name]["pid"] for name in names}) != len(names):
         raise NativeError("Desktop wake process chain repeats a PID")
     if "helper" in value:
-        _helper_profile(bundle, value["helper"])
+        _helper_relative_path(bundle, value["helper"])
         if (value["helper"]["parent_pid"] != value["app"]["pid"]
                 or value["owner"]["parent_pid"] != value["helper"]["pid"]):
             raise NativeError("Desktop wake owner is not the captured app's helper child")
@@ -555,9 +463,9 @@ def _signature(path):
 
 def _profile_topology(bundle, profile, helper):
     if ("helper_relative_path" in profile) != (helper is not None):
-        raise NativeError("Desktop wake process topology disagrees with its qualified app profile")
-    if helper is not None and _helper_profile(bundle, helper) != profile:
-        raise NativeError("Desktop wake helper disagrees with its qualified app profile")
+        raise NativeError("Desktop wake process topology disagrees with its observed app profile")
+    if helper is not None and _helper_relative_path(bundle, helper) != profile["helper_relative_path"]:
+        raise NativeError("Desktop wake helper disagrees with its observed app profile")
 
 
 def _profile(bundle, owner, producer, until, *, helper=None):
@@ -568,28 +476,32 @@ def _profile(bundle, owner, producer, until, *, helper=None):
     if len(data) > 256 * 1024 or _signature(info_path) != before:
         raise NativeError("Desktop wake app metadata changed or exceeds its bound")
     info = plistlib.loads(data)
-    profile = next((profile for profile in _PROFILES
-                    if info.get("CFBundleIdentifier") == profile["bundle_id"]
-                    and info.get("CFBundleShortVersionString") == profile["version"]
-                    and info.get("CFBundleVersion") == profile["build"]
-                    and info.get("CFBundleExecutable") == "ChatGPT"), None)
-    if profile is None:
-        raise NativeError("Desktop wake app version is not qualified")
-    _profile_topology(bundle, profile, helper)
+    if (info.get("CFBundleIdentifier") != "com.openai.codex" or info.get("CFBundleExecutable") != "ChatGPT"
+            or any(not isinstance(info.get(key), str) or not 0 < len(info[key]) <= 256
+                   or any(char in info[key] for char in "\n\r\0")
+                   for key in ("CFBundleShortVersionString", "CFBundleVersion"))):
+        raise NativeError("Desktop wake application identity or metadata is invalid")
+    profile = {"bundle_id": info["CFBundleIdentifier"], "version": info["CFBundleShortVersionString"],
+               "build": info["CFBundleVersion"]}
+    if helper is not None:
+        profile.update(helper_relative_path=_helper_relative_path(bundle, helper), launch_cwd_args=True)
     paths = [(bundle / "Contents/MacOS/ChatGPT", "app_sha256"),
              (bundle / "Contents/Resources/app.asar", "asar_sha256"),
              (bundle / _OWNER_RELATIVE_PATH, "owner_sha256")]
     if Path(owner["executable"]) != paths[2][0]:
         raise NativeError("Desktop wake backend is outside the captured app")
-    if producer != paths[2][0]:
-        paths.append((bundle / "Contents/Resources/codex-cli/bin/codex", "launcher_sha256"))
+    launcher = bundle / "Contents/Resources/codex-cli/bin/codex"
+    if producer not in {paths[2][0], launcher}:
+        raise NativeError("Desktop wake producer is outside the captured app")
+    paths.append((launcher, "launcher_sha256"))
     if helper is not None:
         paths.append((bundle / profile["helper_relative_path"], "helper_sha256"))
     signatures = {str(info_path): before}
     for path, key in paths:
         initial = _signature(path)
-        if files.executable_sha256(path, until) != profile[key] or _signature(path) != initial:
-            raise NativeError("Desktop wake application source or backend is not qualified")
+        profile[key] = files.executable_sha256(path, until)
+        if _signature(path) != initial:
+            raise NativeError("Desktop wake application source changed during inspection")
         signatures[str(path)] = initial
     return profile, signatures
 
@@ -628,8 +540,13 @@ def wake(session_id, descriptor, *, timeout=3):
         validate_session_id("codex", session_id)
         value = _descriptor(descriptor)
         proof = value.get("verification", {})
-        if proof.get("profile") not in _PROFILES or not proof.get("files"):
+        if not isinstance(proof.get("profile"), dict) or not proof.get("files"):
             raise NativeError("Desktop wake requires an outside-hook verified app profile")
+        bundle = _absolute(value["app_bundle"])
+        profile, signatures = _profile(bundle, value["owner"], bundle / _OWNER_RELATIVE_PATH, until,
+                                       helper=value.get("helper"))
+        if profile != proof["profile"] or signatures != proof["files"]:
+            raise NativeError("Desktop wake observed application proof changed")
         _profile_topology(_absolute(value["app_bundle"]), proof["profile"], value.get("helper"))
         if "helper" in value and value["helper"]["executable"] not in proof["files"]:
             raise NativeError("Desktop wake verification omits its helper executable")

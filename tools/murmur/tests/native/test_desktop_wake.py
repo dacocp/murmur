@@ -20,7 +20,16 @@ from murmur.native.types import NativeError, NativeIdentity
 
 SESSION = "11111111-1111-4111-8111-111111111111"
 REAL_PEER_OWNER = desktop_wake._peer_owner
-QUALIFIED_PROFILES = desktop_wake._PROFILES
+# Historical and arbitrary future labels are fixture metadata, never a runtime registry.
+FIXTURE_PROFILES = tuple({"bundle_id": "com.openai.codex", "version": version, "build": build}
+    for version, build in (("26.1103.32239", "25471"), ("26.1103.60933", "25894"),
+                           ("26.1106.51428", "26605"), ("26.1111.21308", "27194"),
+                           ("26.1111.71704", "29030"))) + ({
+    "bundle_id": "com.openai.codex", "version": "26.1117.31558", "build": "29513",
+    "helper_relative_path": "Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/"
+                            "Helpers/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)",
+    "launch_cwd_args": True},)
+
 
 
 class DesktopWakeFixture(unittest.TestCase):
@@ -44,7 +53,7 @@ class DesktopWakeFixture(unittest.TestCase):
                                "owner_sha256": self.digest(self.owner),
                                "asar_sha256": self.digest(self.asar),
                                "launcher_sha256": self.digest(self.launcher)}
-                              for profile in QUALIFIED_PROFILES if not profile.get("helper_relative_path"))
+                              for profile in FIXTURE_PROFILES if not profile.get("helper_relative_path"))
         profile = self.profiles[-1]
         self.info = self.bundle / "Contents/Info.plist"
         self.metadata = {"CFBundleIdentifier": profile["bundle_id"],
@@ -73,7 +82,6 @@ class DesktopWakeFixture(unittest.TestCase):
             patch.object(desktop_wake.os, "getppid", return_value=101),
             patch.object(desktop_wake.process, "identity", side_effect=lambda pid, **_: self.identities[pid]),
             patch.object(desktop_wake.process, "inspect", side_effect=lambda pid: self.commands[pid]),
-            patch.object(desktop_wake, "_PROFILES", self.profiles),
             patch.object(desktop_wake.subprocess, "run", side_effect=self.run_command),
         )
         mocks = []
@@ -163,7 +171,7 @@ class DesktopWakeTests(DesktopWakeFixture):
                          {"bundle_id", "version", "build", "app_sha256", "asar_sha256",
                           "owner_sha256", "launcher_sha256"})
 
-    def test_build29030_requires_direct_parentage_even_when_its_bundle_contains_a_helper(self):
+    def test_actual_parentage_selects_direct_or_helper_independently_of_build(self):
         profile = next(p for p in self.profiles if p["build"] == "29030")
         self.info.write_bytes(plistlib.dumps({**self.metadata,
             "CFBundleShortVersionString": profile["version"], "CFBundleVersion": profile["build"]}))
@@ -185,9 +193,10 @@ class DesktopWakeTests(DesktopWakeFixture):
                                            "--utility-sub-type=node.mojom.NodeService",
                                            "--service-sandbox-type=none"))
         self.run.reset_mock()
-        with self.assertRaises(NativeError):
-            desktop_wake.capture(self.env)
-        self.run.assert_not_called()
+        helper_capture = desktop_wake.capture(self.env)
+        self.assertEqual(helper_capture["helper"]["pid"], 251)
+        self.assertEqual(desktop_wake.verify(self.identity(helper_capture))["verification"]["profile"]["helper_relative_path"],
+                         str(helper.relative_to(self.bundle)))
 
     def test_owner_state_requires_positive_backend_end_not_inspection_failure_or_app_only_death(self):
         identity = self.identity()
@@ -433,7 +442,7 @@ class DesktopWakeTests(DesktopWakeFixture):
         self.assertNotIn("verification", identity.evidence["desktop_wake"])
         self.assertEqual(verified["verification"]["profile"], self.profiles[-1])
         self.assertEqual(set(verified["verification"]["files"]),
-                         {str(self.info), str(self.app), str(self.asar), str(self.owner)})
+                         {str(self.info), str(self.app), str(self.asar), str(self.owner), str(self.launcher)})
 
     def test_full_queue_configuration_must_match_the_captured_local_domain(self):
         identity = self.identity()
@@ -453,22 +462,35 @@ class DesktopWakeTests(DesktopWakeFixture):
         self.assertIn(str(self.launcher), verified["verification"]["files"])
         self.launcher.write_bytes(b"changed producer under the same path")
         self.run.reset_mock()
-        with self.assertRaises(NativeError):
-            desktop_wake.verify(identity)
+        self.assertNotEqual(desktop_wake.verify(identity)["verification"]["profile"],
+                            verified["verification"]["profile"])
+        self.run.reset_mock()
         self.assertEqual(desktop_wake.wake(SESSION, verified).status, "uncertain")
         self.run.assert_not_called()
 
-    def test_unknown_app_source_backend_or_bundle_version_cannot_pass_preflight(self):
+    def test_unseen_build_and_source_bytes_can_be_observed_and_woken(self):
+        for path in (self.app, self.asar, self.owner, self.launcher):
+            path.write_bytes(path.read_bytes() + b" previously unmeasured update")
+        self.info.write_bytes(plistlib.dumps({**self.metadata,
+            "CFBundleShortVersionString": "future-version", "CFBundleVersion": "not-in-any-table"}))
         identity = self.identity()
-        for path in (self.app, self.asar, self.owner):
-            original = path.read_bytes()
-            path.write_bytes(original + b" changed")
-            with self.subTest(path=path), self.assertRaises(NativeError):
-                desktop_wake.verify(identity)
-            path.write_bytes(original)
-        self.info.write_bytes(plistlib.dumps({**self.metadata, "CFBundleVersion": "unknown"}))
-        with self.assertRaises(NativeError):
-            desktop_wake.verify(identity)
+        verified = desktop_wake.verify(identity)
+        profile = verified["verification"]["profile"]
+        self.assertEqual((profile["version"], profile["build"]), ("future-version", "not-in-any-table"))
+        self.assertEqual(profile["owner_sha256"], self.digest(self.owner))
+        self.run.reset_mock()
+        self.assertEqual(desktop_wake.wake(SESSION, verified).status, "accepted")
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.run.call_args.args[0][-1], "codex://threads/wake/" + SESSION)
+
+    def test_other_app_identity_and_malformed_metadata_cannot_wake(self):
+        for key, value in (("CFBundleIdentifier", "someone.else.app"),
+                           ("CFBundleExecutable", "OtherApp"), ("CFBundleVersion", None),
+                           ("CFBundleShortVersionString", ""), ("CFBundleVersion", "bad\nvalue")):
+            self.info.write_bytes(plistlib.dumps({**self.metadata, key: value}, skipkeys=False)
+                                  if value is not None else plistlib.dumps({k:v for k,v in self.metadata.items() if k!=key}))
+            with self.subTest(key=key, value=value), self.assertRaises(NativeError):
+                desktop_wake.verify(self.identity())
         self.run.assert_not_called()
 
     def test_each_known_app_build_freezes_its_own_complete_profile(self):
@@ -486,17 +508,22 @@ class DesktopWakeTests(DesktopWakeFixture):
                                  ["/usr/bin/open", "-g", "-a", str(self.bundle),
                                   "codex://threads/wake/" + SESSION])
 
-    def test_new_app_metadata_cannot_fall_back_to_old_profile_hashes(self):
-        identity = self.identity()
-        identity = replace(identity, target={**identity.target, "binary": str(self.launcher)})
+    def test_frozen_source_hashes_and_file_set_cannot_be_forged(self):
+        verified = desktop_wake.verify(self.identity())
+        self.run.reset_mock()
         for key in ("app_sha256", "asar_sha256", "owner_sha256", "launcher_sha256"):
-            profiles = (*self.profiles[:-1], {**self.profiles[-1], key: "f" * 64})
-            with self.subTest(key=key), patch.object(desktop_wake, "_PROFILES", profiles), \
-                    self.assertRaises(NativeError):
-                desktop_wake.verify(identity)
-            self.run.assert_not_called()
+            changed = deepcopy(verified)
+            changed["verification"]["profile"][key] = "f" * 64
+            with self.subTest(key=key):
+                self.assertEqual(desktop_wake.wake(SESSION, changed).status, "uncertain")
+        for path in verified["verification"]["files"]:
+            changed = deepcopy(verified)
+            changed["verification"]["files"].pop(path)
+            with self.subTest(missing=path):
+                self.assertEqual(desktop_wake.wake(SESSION, changed).status, "uncertain")
+        self.run.assert_not_called()
 
-    def test_recent_builds_are_explicitly_supported(self):
+    def test_version_metadata_is_recorded_without_a_build_registry(self):
         for version, build in (("26.1103.32239", "25471"), ("26.1103.60933", "25894"),
                                ("26.1106.51428", "26605"), ("26.1111.21308", "27194"),
                                ("26.1111.71704", "29030")):
@@ -630,7 +657,7 @@ class DesktopHelperWakeTests(DesktopWakeFixture):
         super().setUp()
         self.direct_profiles = self.profiles
         profiles = []
-        for qualified in QUALIFIED_PROFILES:
+        for qualified in FIXTURE_PROFILES:
             if not qualified.get("helper_relative_path"):
                 continue
             helper = self.bundle / qualified["helper_relative_path"]
@@ -640,9 +667,6 @@ class DesktopHelperWakeTests(DesktopWakeFixture):
                              "owner_sha256": self.digest(self.owner), "asar_sha256": self.digest(self.asar),
                              "launcher_sha256": self.digest(self.launcher), "helper_sha256": self.digest(helper)})
         self.profiles = tuple(profiles)
-        profile_patch = patch.object(desktop_wake, "_PROFILES", self.direct_profiles + self.profiles)
-        profile_patch.start()
-        self.addCleanup(profile_patch.stop)
         self.select_profile(self.profiles[-1])
 
     def select_profile(self, profile):
@@ -687,7 +711,7 @@ class DesktopHelperWakeTests(DesktopWakeFixture):
         self.assertTrue(first["domain"]["supported"])
         self.run.assert_not_called()
 
-    def test_build29513_pins_complete_helper_source_and_freezes_its_proof(self):
+    def test_helper_source_is_observed_and_frozen_in_the_delivery_proof(self):
         self.assertEqual({profile["build"] for profile in self.profiles}, {"29513"})
         self.assertEqual(self.profile["helper_relative_path"],
                          "Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37"
@@ -708,14 +732,37 @@ class DesktopHelperWakeTests(DesktopWakeFixture):
         self.assertEqual(self.run.call_args.args[0], ["/usr/bin/open", "-g", "-a", str(self.bundle),
                                                     "codex://threads/wake/" + SESSION])
 
-    def test_helper_profile_cannot_fall_back_to_other_source_hashes(self):
-        identity = self.identity()
-        identity = replace(identity, target={**identity.target, "binary": str(self.launcher)})
-        for key in ("app_sha256", "asar_sha256", "owner_sha256", "launcher_sha256", "helper_sha256"):
-            profiles = self.direct_profiles + ({**self.profile, key: "f" * 64},)
-            with self.subTest(key=key), patch.object(desktop_wake, "_PROFILES", profiles), \
-                    self.assertRaises(NativeError):
-                desktop_wake.verify(identity)
+    def test_unseen_app_build_and_framework_version_use_actual_helper_identity(self):
+        helper = self.bundle / self.profile["helper_relative_path"].replace("158.0.8127.37", "999.1.2.3")
+        helper.parent.mkdir(parents=True)
+        helper.write_bytes(b"new previously unmeasured helper bytes")
+        self.info.write_bytes(plistlib.dumps({**self.metadata,
+            "CFBundleShortVersionString": "future-helper-release", "CFBundleVersion": "999999"}))
+        _, argv = self.commands[251]
+        self.commands[251] = (str(helper), (str(helper), *argv[1:]))
+        verified = desktop_wake.verify(self.identity())
+        observed = verified["verification"]["profile"]
+        self.assertEqual(observed["build"], "999999")
+        self.assertEqual(observed["helper_relative_path"], str(helper.relative_to(self.bundle)))
+        self.assertEqual(observed["helper_sha256"], self.digest(helper))
+        self.run.reset_mock()
+        self.assertEqual(desktop_wake.wake(SESSION, verified).status, "accepted")
+        self.assertEqual(self.run.call_count, 1)
+
+    def test_frozen_helper_hash_and_generation_cannot_be_forged(self):
+        verified = desktop_wake.verify(self.identity())
+        self.run.reset_mock()
+        for change in ("hash", "missing-file", "generation"):
+            changed = deepcopy(verified)
+            if change == "hash":
+                changed["verification"]["profile"]["helper_sha256"] = "f" * 64
+            elif change == "missing-file":
+                changed["verification"]["files"].pop(str(self.helper))
+            else:
+                changed["helper"]["birth"] = "not the captured helper generation"
+            with self.subTest(change=change):
+                self.assertEqual(desktop_wake.wake(SESSION, changed).status, "uncertain")
+        self.run.assert_not_called()
 
     def test_helper_descriptor_requires_an_exact_distinct_app_helper_owner_chain(self):
         captured = desktop_wake.capture(self.env)
@@ -745,13 +792,15 @@ class DesktopHelperWakeTests(DesktopWakeFixture):
                 desktop_wake.verify(self.identity(descriptor))
         self.run.assert_not_called()
 
-    def test_helper_path_cannot_authenticate_a_direct_profile_or_an_extra_hop(self):
+    def test_app_build_does_not_choose_topology_but_extra_hops_stay_invalid(self):
         identity = self.identity()
         other = next(p for p in self.direct_profiles if p["build"] == "29030")
         self.info.write_bytes(plistlib.dumps({**self.metadata,
             "CFBundleShortVersionString": other["version"], "CFBundleVersion": other["build"]}))
-        with self.assertRaises(NativeError):
-            desktop_wake.verify(identity)
+        observed = desktop_wake.verify(identity)
+        self.assertEqual(observed["verification"]["profile"]["build"], other["build"])
+        self.assertEqual(observed["verification"]["profile"]["helper_relative_path"],
+                         self.profile["helper_relative_path"])
         self.info.write_bytes(plistlib.dumps(self.metadata))
         self.identities[251] = (275, os.getuid(), "helper birth")
         worker = str(self.root / "extra-worker")
@@ -778,8 +827,9 @@ class DesktopHelperWakeTests(DesktopWakeFixture):
         self.identities[251], self.commands[251] = original_identity, original_command
         self.helper.write_bytes(b"changed helper under the same pathname")
         self.run.reset_mock()
-        with self.assertRaises(NativeError):
-            desktop_wake.verify(identity)
+        current = desktop_wake.verify(identity)
+        self.assertEqual(current["verification"]["profile"]["helper_sha256"], self.digest(self.helper))
+        self.run.reset_mock()
         self.assertEqual(desktop_wake.wake(SESSION, verified).status, "uncertain")
         self.run.assert_not_called()
 
@@ -847,7 +897,7 @@ class DesktopHelperWakeTests(DesktopWakeFixture):
             self.identities[201] = (251, os.getuid(), "replacement backend")
             self.assertEqual(desktop_wake.owner_process_state(identity)["status"], "ended")
 
-    def test_only_build29513_accepts_the_complete_ordered_launch_cwd_suffix(self):
+    def test_complete_launch_cwd_suffix_requires_the_supported_helper_topology(self):
         executable, base = self.commands[201]
         suffix = self.launch_cwd_suffix()
         direct = next(p for p in self.direct_profiles if p["build"] == "29030")
