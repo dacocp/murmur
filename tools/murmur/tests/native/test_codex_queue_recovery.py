@@ -442,13 +442,20 @@ class RetainedQueueTests(_StoreFixture):
         with self.assertRaisesRegex(NativeError, 'already exists'):
             recovery.prepare_idle_handoff(self.identity, self.message, self.token, state_root=self.state)
 
-    def test_history_query_failure_reports_its_database_before_any_enqueue(self):
+    def test_history_query_failure_rejects_new_handoff_but_holds_retained_input(self):
         with sqlite3.connect(self.history) as connection:
             connection.execute('DROP TABLE thread_items')
         queue_before = self.queue.read_bytes()
         with self.assertRaisesRegex(NativeError, 'thread_history_1.sqlite.*no such table'):
             recovery.prepare_idle_handoff(self.identity, self.message, self.token, state_root=self.state)
         self.assertEqual(self.queue.read_bytes(), queue_before)
+        self.wake.assert_not_called()
+        self.enqueue()
+        retained_queue, attempt = self.queue.read_bytes(), deepcopy(self.attempt)
+        result = self.probe()
+        self.assertEqual(result['status'], 'held')
+        self.assertIn('thread_history_1.sqlite', result['reason'])
+        self.assertEqual((self.queue.read_bytes(), self.attempt), (retained_queue, attempt))
         self.wake.assert_not_called()
 
     def test_missing_original_proof_is_not_retroactively_qualified(self):
