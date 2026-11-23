@@ -216,6 +216,44 @@ class CoordinatorTests(unittest.TestCase):
         with patch("murmur.native.parse_hook", return_value=captured):
             return hooks.handle(self.ledger, "codex", native_event, {"prompt": prompt or ""})
 
+    def test_native_database_open_failure_releases_only_the_unenqueued_attempt(self):
+        import sqlite3
+        import time
+        from murmur.native import codex_queue_recovery as recovery
+        from murmur.native.types import NativeError
+
+        database = Path(self.home.name).resolve() / "queue_1.sqlite"
+        with sqlite3.connect(database) as connection:
+            connection.execute("CREATE TABLE fixture(value TEXT)")
+
+        def prepare(*args, **kwargs):
+            with recovery._read_db(database, time.monotonic() + 3) as connection:
+                connection.execute("SELECT value FROM fixture").fetchall()
+            return None  # Ordinary delivery, without optional restart evidence.
+
+        self.backend.add("question")
+        self.coordinator.sync(self.actor)
+        with patch.object(self.transport, "prepare_idle_handoff", side_effect=prepare, create=True):
+            with patch.object(recovery.sqlite3, "connect", side_effect=sqlite3.OperationalError("unable to open database file")):
+                with self.assertRaisesRegex(NativeError, "queue_1.sqlite.*unable to open database file"):
+                    self.coordinator.deliver(self.identity)
+            failed = dict(self.ledger.db.execute("SELECT * FROM attempts").fetchone())
+            self.assertEqual((failed["status"], failed["transport"]), ("retired", "rejected"))
+            self.assertIsNone(failed["emission_json"])
+            self.assertEqual(self.transport.calls, [])
+            self.assertEqual([p["id"] for p in self.ledger.unread_posts(self.actor)], ["question"])
+            receipt = self.ledger.db.execute("SELECT read_at,announced_at FROM receipts").fetchone()
+            self.assertEqual(tuple(receipt), (None, None))
+
+            self.assertEqual(self.coordinator.deliver(self.identity).status, "accepted")
+            self.assertEqual(len(self.transport.calls), 1)
+            token = parse_wake(self.transport.calls[0][1])
+            self.assertNotEqual(token, failed["token"])
+            self.assertEqual(self.ledger.attempt(failed["token"])["transport"], "rejected")
+            # The new accepted claim remains reserved; it must not be replayed.
+            self.assertIsNone(self.coordinator.deliver(self.identity))
+            self.assertEqual(len(self.transport.calls), 1)
+
     def test_doorbell_admission_selective_read_reply_and_completion(self):
         self.backend.add("question", causal={"chain_ids": ["review-exchange"]})
         self.backend.add("reply-context", when=102, root="question", causal={"chain_ids": ["review-exchange"]})

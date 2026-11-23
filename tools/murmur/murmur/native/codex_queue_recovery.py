@@ -45,12 +45,17 @@ def _digest(value):
 @contextmanager
 def _read_db(path, until):
     before = _file(path)
-    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True,
-                                  timeout=min(.2, files.remaining(until)))) as connection:
-        connection.execute('PRAGMA query_only=ON')
-        connection.set_progress_handler(lambda: time.monotonic() >= until, 1000)
-        yield connection
-        files.remaining(until)
+    try:
+        with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True,
+                                      timeout=min(.2, files.remaining(until)))) as connection:
+            connection.execute('PRAGMA query_only=ON')
+            connection.set_progress_handler(lambda: time.monotonic() >= until, 1000)
+            yield connection
+            files.remaining(until)
+    except sqlite3.Error as error:
+        # Keep failures before enqueue in the native error contract so the
+        # coordinator rejects the unattempted handoff instead of reserving it.
+        raise NativeError(f'Native database {path.name} could not be read: {error}') from error
     if _file(path) != before:
         raise NativeError('Native database identity changed during its read')
 
